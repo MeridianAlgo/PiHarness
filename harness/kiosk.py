@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 from harness import config
-from harness.programs import _run, load
+from harness import programs
+from harness.programs import load
 
 KIOSK_UNIT = "harness-kiosk"
 DRM_DIR = Path("/sys/class/drm")
@@ -150,7 +151,7 @@ def show(name: str, prog: dict) -> None:
     if not browser or not cage or not shutil.which("seatd"):
         raise KioskError("Kiosk tools missing. Run: "
                          "sudo apt install cage seatd chromium-browser")
-    _run(["systemctl", "enable", "--now", "seatd"], timeout=15)
+    programs._run(["systemctl", "enable", "--now", "seatd"], timeout=15)
     config.KIOSK_SCRIPT.parent.mkdir(parents=True, exist_ok=True)
     config.KIOSK_SCRIPT.write_text(_LAUNCH_SCRIPT.format(
         port=prog["web_port"], browser=browser, cage=cage))
@@ -178,18 +179,18 @@ def show(name: str, prog: dict) -> None:
         changed = True
     unit_path.write_text(new_text)
     if changed:
-        _run(["systemctl", "daemon-reload"], timeout=15)
+        programs._run(["systemctl", "daemon-reload"], timeout=15)
     # Always on: enable so the screen comes back by itself after a reboot.
     # --no-block: the kiosk's own start waits for the program's port (up to
     # 3 min) — enqueue it and return; the screen comes up when it's ready.
-    code, out = _run(["systemctl", "enable", "--now", "--no-block", KIOSK_UNIT], timeout=30)
+    code, out = programs._run(["systemctl", "enable", "--now", "--no-block", KIOSK_UNIT], timeout=30)
     if code > 0:
         raise KioskError(f"Could not start the kiosk: {out[-300:]}")
     if changed:
         # `enable --now` doesn't restart an already-active kiosk — restart so
         # the rewritten unit takes effect. An unchanged unit is left alone; a
         # restart storm on every edit helps nobody.
-        _run(["systemctl", "restart", "--no-block", KIOSK_UNIT], timeout=30)
+        programs._run(["systemctl", "restart", "--no-block", KIOSK_UNIT], timeout=30)
     try:
         config.MONITOR_FILE.write_text(name)
     except OSError:
@@ -197,12 +198,12 @@ def show(name: str, prog: dict) -> None:
 
 
 def off() -> None:
-    _run(["systemctl", "disable", "--now", KIOSK_UNIT], timeout=30)
+    programs._run(["systemctl", "disable", "--now", KIOSK_UNIT], timeout=30)
     try:
         (config.UNIT_DIR / f"{KIOSK_UNIT}.service").unlink()
     except OSError:
         pass
-    _run(["systemctl", "daemon-reload"], timeout=15)
+    programs._run(["systemctl", "daemon-reload"], timeout=15)
     try:
         config.MONITOR_FILE.unlink()
     except OSError:
@@ -213,7 +214,7 @@ def kick(name: str) -> None:
     """Restart the kiosk when the program on screen restarts. Chromium never
     recovers on its own from a page that died under it."""
     if current() == name:
-        _run(["systemctl", "restart", "--no-block", KIOSK_UNIT], timeout=30)
+        programs._run(["systemctl", "restart", "--no-block", KIOSK_UNIT], timeout=30)
 
 
 def refresh() -> None:

@@ -228,11 +228,32 @@ def test_history_is_bounded(authed):
 def test_cpu_percent_needs_two_samples():
     """The first reading after start has no previous total to diff against, and
     reporting a number there would be inventing one."""
+    import time
+
     metrics._prev_cpu = None
     if metrics._read("/proc/stat") is None:
         pytest.skip("not Linux")
     assert metrics.cpu_percent() is None
+    # /proc/stat counts in jiffies (10ms). Two reads in the same jiffy give a
+    # zero delta and correctly report None, so wait for the clock to move.
+    time.sleep(0.15)
     assert metrics.cpu_percent() is not None
+
+
+def test_no_module_binds_run_at_import():
+    """`from harness.programs import _run` binds the original function, so a
+    monkeypatch of programs._run does not reach that module and the test shells
+    out for real. That bug is invisible wherever systemctl is absent (_run
+    returns -1, which no caller treats as failure) and only appears on a machine
+    that has it, so it needs a check that does not depend on the platform."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "harness"
+    offenders = [p.name for p in root.glob("*.py")
+                 if "from harness.programs import" in p.read_text(encoding="utf-8")
+                 and "_run" in p.read_text(encoding="utf-8").split(
+                     "from harness.programs import")[1].split("\n")[0]]
+    assert not offenders, f"{offenders} bind _run at import; call programs._run instead"
 
 
 def test_program_stats_parses_systemd_output(monkeypatch):

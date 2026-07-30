@@ -17,7 +17,7 @@ import threading
 import time
 from typing import Optional
 
-from harness import config
+from harness import config, programs
 
 # CPU percent needs two readings, so the previous /proc/stat total is kept here
 # and the first sample after boot reports None rather than a made-up number.
@@ -121,8 +121,7 @@ def throttled() -> Optional[dict]:
     """Pi power/thermal flags from vcgencmd. The undervoltage bit is the usual
     cause of a Pi that behaves strangely under load, so it is worth surfacing
     even though nothing else here needs a Pi-only tool."""
-    from harness.programs import _run
-    code, out = _run(["vcgencmd", "get_throttled"], timeout=5)
+    code, out = programs._run(["vcgencmd", "get_throttled"], timeout=5)
     if code != 0 or "=" not in out:
         return None
     try:
@@ -156,9 +155,8 @@ def program_stats(unit_name: str) -> dict:
     """Memory, CPU time, restart count and uptime for one program's unit.
     Missing values come back as None; systemd reports properties it can't
     determine as the string [not set] or as 2**64-1."""
-    from harness.programs import _run
-    code, out = _run(["systemctl", "show", unit_name,
-                      "--property=" + ",".join(_SHOW_PROPS)], timeout=10)
+    code, out = programs._run(
+        ["systemctl", "show", unit_name, "--property=" + ",".join(_SHOW_PROPS)], timeout=10)
     if code != 0:
         return {}
     raw = {}

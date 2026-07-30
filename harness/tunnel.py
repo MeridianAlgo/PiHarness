@@ -23,7 +23,7 @@ import time
 from typing import Optional
 
 from harness import config
-from harness.programs import _run
+from harness import programs
 
 TUNNEL_UNIT = "harness-tunnel"
 MODES = ("quick", "named")
@@ -114,14 +114,14 @@ def _write_token(token: Optional[str]) -> None:
 # ── Status ────────────────────────────────────────────────────────────────────
 
 def unit_state() -> str:
-    code, out = _run(["systemctl", "is-active", TUNNEL_UNIT], timeout=5)
+    code, out = programs._run(["systemctl", "is-active", TUNNEL_UNIT], timeout=5)
     return out if code >= 0 and out in ("active", "inactive", "failed", "activating") else "unknown"
 
 
 def quick_hostname() -> Optional[str]:
     """Scrape the assigned hostname out of the journal. Quick tunnels announce
     theirs once at startup and never again, so there is nowhere else to get it."""
-    code, out = _run(["journalctl", "-u", TUNNEL_UNIT, "--no-pager", "-n", "200"], timeout=10)
+    code, out = programs._run(["journalctl", "-u", TUNNEL_UNIT, "--no-pager", "-n", "200"], timeout=10)
     if code != 0:
         return None
     found = _QUICK_HOST_RE.findall(out)
@@ -201,10 +201,10 @@ def enable(mode: str, token: Optional[str] = None, hostname: Optional[str] = Non
     config.UNIT_DIR.mkdir(parents=True, exist_ok=True)
     if not unit_path.exists() or unit_path.read_text() != text:
         unit_path.write_text(text)
-        _run(["systemctl", "daemon-reload"], timeout=15)
+        programs._run(["systemctl", "daemon-reload"], timeout=15)
 
     save({"enabled": True, "mode": mode, "hostname": hostname})
-    code, out = _run(["systemctl", "enable", "--now", TUNNEL_UNIT], timeout=45)
+    code, out = programs._run(["systemctl", "enable", "--now", TUNNEL_UNIT], timeout=45)
     if code > 0:
         raise TunnelError(f"Could not start the tunnel: {out[-300:]}")
 
@@ -220,19 +220,19 @@ def enable(mode: str, token: Optional[str] = None, hostname: Optional[str] = Non
 
 
 def disable() -> dict:
-    _run(["systemctl", "disable", "--now", TUNNEL_UNIT], timeout=30)
+    programs._run(["systemctl", "disable", "--now", TUNNEL_UNIT], timeout=30)
     try:
         (config.UNIT_DIR / f"{TUNNEL_UNIT}.service").unlink()
     except FileNotFoundError:
         pass
-    _run(["systemctl", "daemon-reload"], timeout=15)
+    programs._run(["systemctl", "daemon-reload"], timeout=15)
     _write_token(None)
     save({"enabled": False, "mode": None, "hostname": None})
     return status()
 
 
 def logs(lines: int = 80) -> str:
-    code, out = _run(["journalctl", "-u", TUNNEL_UNIT, "--no-pager", "-n",
+    code, out = programs._run(["journalctl", "-u", TUNNEL_UNIT, "--no-pager", "-n",
                       str(min(lines, 400))], timeout=10)
     return out if code == 0 else "No tunnel logs available."
 
