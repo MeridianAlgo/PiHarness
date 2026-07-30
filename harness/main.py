@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from harness import __version__, api, auth, config, kiosk, programs
+from harness import __version__, api, auth, config, kiosk, metrics, programs, tunnel
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -20,10 +20,12 @@ log = logging.getLogger("harness")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Reapply the current unit templates to already-installed programs and to an
-    # armed kiosk, so fixes land on restart without re-importing anything.
+    # Reapply the current unit templates to already-installed programs, an armed
+    # kiosk and an enabled tunnel, so fixes land on restart without any
+    # re-importing or re-configuring.
     kiosk.refresh()
     programs.refresh_units()
+    await asyncio.to_thread(tunnel.refresh)
 
     async def _auto_update_loop():
         while True:
@@ -35,11 +37,23 @@ async def lifespan(_app: FastAPI):
             except Exception:   # noqa: BLE001 - a bad cycle can't kill the loop
                 log.exception("auto-update cycle failed")
 
-    task = asyncio.create_task(_auto_update_loop())
+    async def _metrics_loop():
+        # One sampler, one owner of the /proc/stat delta. Every reader gets the
+        # history this writes rather than sampling for itself.
+        while True:
+            try:
+                await asyncio.to_thread(metrics.sample_once)
+            except Exception:   # noqa: BLE001 - never let a bad read stop sampling
+                log.exception("metrics sample failed")
+            await asyncio.sleep(config.METRICS_INTERVAL)
+
+    tasks = [asyncio.create_task(_auto_update_loop()),
+             asyncio.create_task(_metrics_loop())]
     try:
         yield
     finally:
-        task.cancel()
+        for task in tasks:
+            task.cancel()
 
 
 app = FastAPI(
@@ -62,8 +76,34 @@ if config.CORS_ORIGINS:
 _ALLOWED_ORIGIN_HOSTS = {urlparse(o).netloc for o in config.CORS_ORIGINS}
 
 
+def _client_addr(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
+    from fastapi.responses import JSONResponse
+    path = request.url.path
+
+    # Body cap, checked before the body is read into memory. A missing or lying
+    # Content-Length still can't do damage: the endpoints that accept large
+    # input enforce their own limits.
+    try:
+        if int(request.headers.get("content-length") or 0) > config.MAX_BODY_BYTES:
+            return JSONResponse({"detail": "Request body too large"}, status_code=413)
+    except ValueError:
+        return JSONResponse({"detail": "Invalid Content-Length"}, status_code=400)
+
+    # Rate limit. The proxied programs under /apps are deliberately exempt:
+    # they serve their own assets, and a page with thirty images is normal.
+    if path.startswith("/api"):
+        is_login = path in ("/api/login", "/api/setup")
+        limit = config.RATE_LIMIT_LOGIN if is_login else config.RATE_LIMIT
+        retry = auth.rate_limit(_client_addr(request) + (":login" if is_login else ""), limit)
+        if retry:
+            return JSONResponse({"detail": f"Too many requests. Try again in {retry}s."},
+                                status_code=429, headers={"Retry-After": str(retry)})
+
     # CSRF: a cross-site page can't read our token, but it can ride the session
     # cookie on a state-changing request. Reject those unless the Origin is us
     # (or an allowed dev origin). Bearer-token callers carry no cookie and set
@@ -75,7 +115,6 @@ async def _security_headers(request: Request, call_next):
         origin = request.headers.get("origin") or request.headers.get("referer")
         host = urlparse(origin).netloc if origin else ""
         if host and host != request.url.netloc and host not in _ALLOWED_ORIGIN_HOSTS:
-            from fastapi.responses import JSONResponse
             return JSONResponse({"detail": "Cross-origin request blocked"}, status_code=403)
 
     resp = await call_next(request)
@@ -87,14 +126,37 @@ async def _security_headers(request: Request, call_next):
         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
         "connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+    # Reachable from the internet means the browser should refuse to speak plain
+    # HTTP to us at all. Not set otherwise: pinning HSTS on a LAN hostname that
+    # has no certificate would lock the user out of their own Pi.
+    if _public_facing():
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
     # Never cache the UI, or a browser keeps stale JS after an update.
-    p = request.url.path
-    if p == "/" or p.startswith("/assets"):
+    if path == "/" or path.startswith("/assets"):
         resp.headers["Cache-Control"] = "no-store, must-revalidate"
     return resp
 
 
+# Asking systemd whether the tunnel is up on every single request would be a
+# subprocess per request. The answer changes only when the tunnel is switched,
+# so it is cached briefly.
+_public_cache = [0.0, False]
+
+
+def _public_facing() -> bool:
+    import time
+    now = time.monotonic()
+    if now - _public_cache[0] > 30:
+        _public_cache[0] = now
+        try:
+            _public_cache[1] = bool(config.PUBLIC_URL) or tunnel.is_active()
+        except Exception:   # noqa: BLE001 - never fail a response over this
+            _public_cache[1] = bool(config.PUBLIC_URL)
+    return _public_cache[1]
+
+
 app.include_router(api.router)
+app.include_router(api.system)  # /api/metrics, /api/tunnel, /api/tokens, /api/prompt
 app.include_router(api.proxy)   # /apps/<name>/ web access to programs
 
 
@@ -105,9 +167,13 @@ def _client_ip(request: Request) -> str:
 
 
 def _set_cookie(response: Response, token: str) -> None:
+    # Secure is forced on whenever the harness is reachable from the internet,
+    # so the session cookie can't be sent in the clear even if someone reaches
+    # the Pi over plain HTTP at the same time.
     response.set_cookie(
         config.COOKIE_NAME, token,
-        httponly=True, samesite="lax", secure=config.COOKIE_SECURE,
+        httponly=True, samesite="lax",
+        secure=config.COOKIE_SECURE or _public_facing(),
         max_age=config.SESSION_TTL_HOURS * 3600, path="/")
 
 
@@ -137,7 +203,10 @@ def setup(req: LoginRequest, request: Request, response: Response):
     token = auth.create_session(req.username.strip())
     _set_cookie(response, token)
     log.info("initial account created from %s", _client_ip(request))
-    return {"status": "ok", "username": req.username.strip(), "token": token}
+    # The session token is not returned. It is the cookie's value, and handing
+    # it to the caller as an API credential is what made sessions unrevocable.
+    # Scripts create an API token instead: POST /api/tokens.
+    return {"status": "ok", "username": req.username.strip()}
 
 
 @app.post("/api/login")
@@ -153,7 +222,7 @@ def login(req: LoginRequest, request: Request, response: Response):
     auth.throttle_reset(ip)
     token = auth.create_session(req.username)
     _set_cookie(response, token)
-    return {"status": "ok", "username": req.username, "token": token}
+    return {"status": "ok", "username": req.username}
 
 
 @app.post("/api/logout")

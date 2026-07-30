@@ -363,6 +363,105 @@ span.prog-chip.dim { cursor: default; border-style: dashed; }
 }
 .prog-empty b { font: 600 13px/1.4 var(--mono); color: var(--text-2); }
 
+/* ── Dashboard ────────────────────────────────────────────────────────────── */
+/* Stat tiles, not charts: the current number is the answer, the sparkline is
+   context for it. Each tile is one series, so no legend — the label names it.
+   Tile colour is the status palette only, and never appears without the state
+   word beside it, so the meaning survives colourblindness and greyscale. */
+
+.tiles {
+  display: grid; gap: 1px; margin-bottom: var(--s3);
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  background: var(--line);            /* 1px hairlines, drawn by the gap */
+  border: 1px solid var(--line);
+}
+.tile { display: flex; flex-direction: column; gap: 6px; padding: var(--s3); background: var(--surface); }
+.tile-head { display: flex; align-items: baseline; gap: var(--s2); }
+.tile-label {
+  font: 500 10.5px/1 var(--mono); letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--text-3);
+}
+.tile-state {
+  margin-left: auto; padding: 1px 5px;
+  font: 500 10px/1.4 var(--mono); letter-spacing: 0.04em;
+  border: 1px solid transparent; border-radius: 2px;
+}
+.tile-state.ok   { color: var(--text-3); }
+.tile-state.warn { color: var(--wait); background: var(--wait-bg); border-color: var(--wait-line); }
+.tile-state.crit { color: var(--fail); background: var(--fail-bg); border-color: var(--fail-line); }
+.tile-value {
+  font: 600 24px/1 var(--mono); letter-spacing: -0.02em; color: var(--text);
+  font-variant-numeric: tabular-nums;   /* the number must not jitter as it ticks */
+}
+.tile-unit { margin-left: 2px; font-size: 13px; font-weight: 500; color: var(--text-3); }
+.tile-sub { font: 400 10.5px/1.4 var(--mono); color: var(--text-3); }
+.tile-spark { display: block; width: 100%; height: 26px; overflow: visible; }
+.tile-spark path { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke;
+                   stroke-linejoin: round; stroke-linecap: round; }
+.tile-spark .spark-line { stroke: var(--text-3); }
+.tile.warn .tile-spark .spark-line { stroke: var(--wait); }
+.tile.crit .tile-spark .spark-line { stroke: var(--fail); }
+.tile-spark .spark-cursor { stroke: var(--text-2); stroke-width: 1; opacity: 0; }
+.tile-spark .spark-dot { fill: var(--text); opacity: 0; }
+.tile:hover .tile-spark .spark-cursor, .tile:hover .tile-spark .spark-dot { opacity: 1; }
+.tile-read {
+  min-height: 13px;
+  font: 400 10.5px/1.2 var(--mono); color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.host-line {
+  display: flex; flex-wrap: wrap; gap: var(--s3);
+  font: 400 11px/1.5 var(--mono); color: var(--text-3);
+}
+.host-line b { font-weight: 500; color: var(--text-2); }
+.host-warn {
+  margin-top: var(--s3); padding: 8px 10px;
+  font: 400 11.5px/1.5 var(--mono); color: var(--wait);
+  background: var(--wait-bg); border-left: 2px solid var(--wait); border-radius: 0 var(--r) var(--r) 0;
+}
+
+/* Per-program resource readout, sitting under the command in a card. */
+.prog-stats {
+  display: flex; flex-wrap: wrap; gap: var(--s3); margin: var(--s2) 0 0 15px;
+  font: 400 10.5px/1.5 var(--mono); color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.prog-stats b { font-weight: 500; color: var(--text-2); }
+
+/* ── Tunnel and tokens ────────────────────────────────────────────────────── */
+
+.tunnel-state { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s3); }
+.tunnel-url {
+  flex: 1; min-width: 0; padding: 7px 10px;
+  font: 400 12px/1.4 var(--mono); color: var(--text);
+  background: var(--field); border: 1px solid var(--line); border-radius: var(--r);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tunnel-url a { color: var(--text); }
+.tunnel-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.tunnel-note {
+  margin-top: var(--s3); font-size: 12px; line-height: 1.6; color: var(--text-3);
+}
+
+.token-row {
+  display: flex; align-items: center; gap: var(--s2); padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font: 400 11.5px/1.4 var(--mono);
+}
+.token-row:first-child { border-top: none; }
+.token-label { color: var(--text-2); }
+.token-meta { margin-left: auto; color: var(--text-3); font-size: 10.5px; }
+.token-new {
+  margin-top: var(--s3); padding: 10px 11px;
+  background: var(--field); border: 1px solid var(--run-line); border-radius: var(--r);
+}
+.token-new code {
+  display: block; margin-top: 5px; font: 400 12px/1.5 var(--mono);
+  color: var(--run); word-break: break-all; user-select: all;
+}
+.token-new p { font-size: 11.5px; color: var(--text-2); }
+
 /* ── Toasts ───────────────────────────────────────────────────────────────── */
 
 #toast-container {

@@ -89,6 +89,42 @@ else
   info "Skipped — install later with: sudo apt install cage seatd chromium-browser"
 fi
 
+# ── Cloudflare tunnel (optional) ─────────────────────────────────────────────
+# Installed but never started here. Turning it on is a deliberate act in the web
+# UI, because it puts the sign-in page on the public internet.
+section "Remote access"
+TUNNEL="${HARNESS_TUNNEL:-}"
+if [[ -z "$TUNNEL" ]]; then
+  read -rp "Install cloudflared, so you can reach your programs from anywhere? [y/N] " TUNNEL || true
+fi
+if [[ "${TUNNEL,,}" =~ ^(y|yes)$ ]]; then
+  if command -v cloudflared >/dev/null 2>&1; then
+    info "cloudflared already installed"
+  else
+    case "$(uname -m)" in
+      aarch64|arm64) CF_ARCH=arm64 ;;
+      armv7l|armv6l) CF_ARCH=arm ;;
+      x86_64)        CF_ARCH=amd64 ;;
+      *)             CF_ARCH="" ;;
+    esac
+    if [[ -z "$CF_ARCH" ]]; then
+      warn "Unknown architecture $(uname -m) — install cloudflared by hand"
+    else
+      step "Downloading cloudflared for $CF_ARCH…"
+      if curl -fsSL -o /tmp/cloudflared.deb \
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}.deb" \
+        && dpkg -i /tmp/cloudflared.deb >/dev/null 2>&1; then
+        info "cloudflared installed — turn the tunnel on under Remote access in the web UI"
+      else
+        warn "cloudflared failed to install — the Remote access panel will say so"
+      fi
+      rm -f /tmp/cloudflared.deb
+    fi
+  fi
+else
+  info "Skipped — the Remote access panel explains how to add it later"
+fi
+
 # ── Code ─────────────────────────────────────────────────────────────────────
 section "PiHarness"
 mkdir -p "$CONFIG_DIR" "$PROGRAMS_DIR"

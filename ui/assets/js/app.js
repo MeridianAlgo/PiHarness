@@ -4,6 +4,7 @@
 
 let authToken = null;      // only used when the UI is served cross-origin
 let pollTimer = null;
+let metricsTimer = null;
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -49,6 +50,7 @@ function showLogin() {
   $('view-app').classList.add('hidden');
   $('view-login').classList.remove('hidden');
   clearTimeout(pollTimer);
+  clearInterval(metricsTimer);   // or a signed-out tab keeps polling forever
   setTimeout(() => $('login-user').focus(), 50);
 }
 
@@ -57,6 +59,13 @@ function showApp(username) {
   $('view-app').classList.remove('hidden');
   $('topbar-ver').textContent = username ? `signed in as ${username}` : '';
   loadPrograms();
+  loadMetrics();
+  loadTunnel();
+  loadTokens();
+  // The dashboard is the one thing that has to stay live. Polling matches the
+  // server's sample interval, so it never asks for a point that doesn't exist.
+  clearInterval(metricsTimer);
+  metricsTimer = setInterval(loadMetrics, 5000);
 }
 
 async function boot() {
@@ -122,6 +131,144 @@ async function changePassword() {
   toast('Password changed. Signing you out.', 'success', 2500);
   setTimeout(() => location.reload(), 1200);
 }
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+const fmtBytes = n => {
+  if (n === null || n === undefined) return '—';
+  const units = ['B', 'K', 'M', 'G', 'T'];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)}${units[i]}`;
+};
+
+const fmtDuration = s => {
+  if (s === null || s === undefined) return '—';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  return `${m}m`;
+};
+
+// Each tile's scale is fixed, not fitted to the data. A sparkline rescaled to
+// its own min/max turns a 2% wobble into a cliff; a constant domain means the
+// shape and the height both mean something, and two tiles can be compared.
+const TILES = [
+  {key: 'cpu',    label: 'CPU',    unit: '%',  domain: [0, 100], warn: 75, crit: 90},
+  // The Pi soft-throttles at 80°C and hard-caps at 85, so those are the
+  // thresholds that matter — not an arbitrary "hot".
+  {key: 'temp',   label: 'Temp',   unit: '°C', domain: [30, 90], warn: 70, crit: 80},
+  {key: 'memory', label: 'Memory', unit: '%',  domain: [0, 100], warn: 80, crit: 92},
+  {key: 'disk',   label: 'Disk',   unit: '%',  domain: [0, 100], warn: 85, crit: 95},
+];
+
+const tileState = (v, t) => v === null || v === undefined ? 'ok'
+  : v >= t.crit ? 'crit' : v >= t.warn ? 'warn' : 'ok';
+
+const STATE_WORD = {ok: 'ok', warn: 'high', crit: 'critical'};
+
+function sparkPath(values, domain, w, h) {
+  if (values.length < 2) return '';
+  const [lo, hi] = domain, span = (hi - lo) || 1;
+  const step = w / (values.length - 1);
+  return values.map((v, i) => {
+    const y = h - ((Math.max(lo, Math.min(hi, v)) - lo) / span) * h;
+    return `${i ? 'L' : 'M'}${(i * step).toFixed(2)} ${y.toFixed(2)}`;
+  }).join(' ');
+}
+
+function tileMarkup(t, value, series, sub) {
+  const state = tileState(value, t);
+  const values = series.map(p => p[1]);
+  const w = 100, h = 26;
+  const shown = value === null || value === undefined ? '—'
+    : (t.unit === '%' ? Math.round(value) : value.toFixed(1));
+  // The state word travels with the colour, so the tile still reads correctly
+  // in greyscale or with any colour vision deficiency.
+  const label = `${t.label}: ${shown}${t.unit === '%' ? '%' : ' °C'}, ${STATE_WORD[state]}`
+    + (values.length > 1 ? `. Last ${values.length} samples ranged ${Math.min(...values).toFixed(0)} to ${Math.max(...values).toFixed(0)}.` : '');
+  return `<div class="tile ${state}" data-tile="${t.key}">
+    <div class="tile-head">
+      <span class="tile-label">${t.label}</span>
+      <span class="tile-state ${state}">${STATE_WORD[state]}</span>
+    </div>
+    <div class="tile-value">${shown}<span class="tile-unit">${t.unit}</span></div>
+    <svg class="tile-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"
+         role="img" aria-label="${esc(label)}" data-domain="${t.domain[0]},${t.domain[1]}">
+      <path class="spark-line" d="${sparkPath(values, t.domain, w, h)}"/>
+      <line class="spark-cursor" x1="0" y1="0" x2="0" y2="${h}"/>
+      <circle class="spark-dot" r="2.5" cx="0" cy="0"/>
+    </svg>
+    <div class="tile-read" data-read="${t.key}">${sub || ''}</div>
+  </div>`;
+}
+
+let _series = {};
+
+async function loadMetrics() {
+  const r = await api('/api/metrics');
+  if (!r?.ok) return;
+  const m = await r.json();
+  _series = m.history || {};
+  const host = m.host || {};
+  const mem = host.memory || {}, disk = host.disk || {};
+  const current = {cpu: host.cpu_percent, temp: host.temperature,
+                   memory: mem.percent, disk: disk.percent};
+  const subs = {
+    cpu: host.load ? `load ${host.load.join(' ')}` : '',
+    temp: '',
+    memory: mem.total ? `${fmtBytes(mem.used)} of ${fmtBytes(mem.total)}` : '',
+    disk: disk.total ? `${fmtBytes(disk.free)} free` : '',
+  };
+  $('tiles').innerHTML = TILES
+    .map(t => tileMarkup(t, current[t.key], _series[t.key] || [], subs[t.key])).join('');
+
+  $('host-line').innerHTML = [
+    host.model ? `<span><b>${esc(host.model)}</b></span>` : '',
+    host.cpu_count ? `<span>${host.cpu_count} cores</span>` : '',
+    host.uptime ? `<span>up <b>${fmtDuration(host.uptime)}</b></span>` : '',
+    `<span>sampling every ${m.interval}s</span>`,
+  ].filter(Boolean).join('');
+
+  // Undervoltage is the single most common cause of a Pi that behaves oddly
+  // under load, and it is invisible unless something says so.
+  const th = m.throttled, warn = $('host-warn');
+  const notes = [];
+  if (th?.under_voltage_now) notes.push('Undervoltage right now — the power supply is not keeping up.');
+  else if (th?.under_voltage_since_boot) notes.push('Undervoltage has occurred since boot.');
+  if (th?.throttled_now) notes.push('Thermally throttled right now.');
+  else if (th?.throttled_since_boot) notes.push('Thermal throttling has occurred since boot.');
+  warn.textContent = notes.join(' ');
+  warn.classList.toggle('hidden', !notes.length);
+
+  _progStats = m.programs || {};
+  paintProgramStats();
+}
+
+// A sparkline is a plot, so it gets a readout: hovering reveals the value at
+// that point rather than leaving the trend unquantified.
+document.addEventListener('mousemove', e => {
+  const svg = e.target.closest?.('.tile-spark');
+  if (!svg) return;
+  const key = svg.closest('.tile')?.dataset.tile;
+  const series = _series[key] || [];
+  if (series.length < 2) return;
+  const box = svg.getBoundingClientRect();
+  const frac = Math.max(0, Math.min(1, (e.clientX - box.left) / box.width));
+  const i = Math.round(frac * (series.length - 1));
+  const [lo, hi] = svg.dataset.domain.split(',').map(Number);
+  const v = series[i][1], x = (i / (series.length - 1)) * 100;
+  const y = 26 - ((Math.max(lo, Math.min(hi, v)) - lo) / ((hi - lo) || 1)) * 26;
+  svg.querySelector('.spark-cursor').setAttribute('x1', x);
+  svg.querySelector('.spark-cursor').setAttribute('x2', x);
+  const dot = svg.querySelector('.spark-dot');
+  dot.setAttribute('cx', x); dot.setAttribute('cy', y);
+  const ago = Math.round((series[series.length - 1][0] - series[i][0]));
+  const unit = TILES.find(t => t.key === key)?.unit === '%' ? '%' : '°C';
+  const read = document.querySelector(`[data-read="${key}"]`);
+  if (read) read.textContent = `${v}${unit} · ${ago ? `${ago}s ago` : 'now'}`;
+});
+
 
 // ── Programs ──────────────────────────────────────────────────────────────────
 
@@ -248,6 +395,7 @@ function card(p, mon) {
     </div>
     ${p.start_command && p.status !== 'importing'
       ? `<div class="prog-cmd" ${act('command', p.name, p.start_command)} title="Start command. Click to change.">${esc(p.start_command)}</div>` : ''}
+    <div class="prog-stats hidden" data-stats="${esc(p.name)}"></div>
     ${p.error && (p.status === 'error' || p.status === 'failed') ? `<div class="prog-err">${esc(p.error)}</div>` : ''}
     ${links ? `<div class="prog-links">${links}</div>` : ''}
     ${actions}
@@ -261,6 +409,98 @@ function card(p, mon) {
     </div>
     <pre class="prog-logs hidden" data-logs="${esc(p.name)}"></pre>
   </div>`;
+}
+
+let _progStats = {};
+
+function paintProgramStats() {
+  for (const [name, s] of Object.entries(_progStats)) {
+    const box = document.querySelector(`[data-stats="${CSS.escape(name)}"]`);
+    if (!box) continue;
+    const bits = [];
+    if (s.uptime) bits.push(`up <b>${fmtDuration(s.uptime)}</b>`);
+    if (s.memory) bits.push(`mem <b>${fmtBytes(s.memory)}</b>`);
+    if (s.cpu_seconds !== null && s.cpu_seconds !== undefined) bits.push(`cpu <b>${fmtDuration(s.cpu_seconds)}</b>`);
+    if (s.restarts) bits.push(`restarts <b>${s.restarts}</b>`);
+    if (s.pid) bits.push(`pid <b>${s.pid}</b>`);
+    box.innerHTML = bits.join('');
+    box.classList.toggle('hidden', !bits.length);
+  }
+}
+
+// ── Remote access ─────────────────────────────────────────────────────────────
+
+async function loadTunnel() {
+  const r = await api('/api/tunnel');
+  if (!r?.ok) return;
+  const t = await r.json();
+  const state = $('tunnel-state'), actions = $('tunnel-actions');
+  $('tunnel-pill').classList.toggle('hidden', !t.url);
+
+  if (!t.installed) {
+    state.innerHTML = `<span class="prog-badge wait">cloudflared not installed</span>`;
+    actions.innerHTML = '';
+    $('tunnel-named').classList.add('hidden');
+    state.insertAdjacentHTML('beforeend',
+      `<span class="tunnel-url">Install it on the Pi, then reload this page.</span>`);
+    return;
+  }
+  $('tunnel-named').classList.remove('hidden');
+
+  const badge = !t.enabled ? '<span class="prog-badge">off</span>'
+    : t.state === 'active' && t.url ? '<span class="prog-badge run">connected</span>'
+    : t.state === 'failed' ? '<span class="prog-badge fail">failed</span>'
+    : '<span class="prog-badge wait">connecting</span>';
+  const url = t.url
+    ? `<span class="tunnel-url"><a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.url)}</a></span>`
+    : t.enabled ? '<span class="tunnel-url">Waiting for Cloudflare to assign an address…</span>'
+    : '<span class="tunnel-url">No public address. The Pi is reachable on your LAN only.</span>';
+  state.innerHTML = badge + url
+    + (t.ephemeral && t.url ? '<span class="prog-badge wait">changes on restart</span>' : '');
+
+  actions.innerHTML = t.enabled
+    ? `<button class="btn btn-sm" data-act="tunneloff">Turn off</button>
+       <button class="btn btn-ghost btn-sm" data-act="tunnellogs">Tunnel logs</button>`
+    : `<button class="btn btn-primary btn-sm" data-act="tunnelquick">Get a public address</button>`;
+}
+
+// ── API tokens ────────────────────────────────────────────────────────────────
+
+async function loadTokens() {
+  const r = await api('/api/tokens');
+  if (!r?.ok) return;
+  const tokens = (await r.json()).tokens;
+  $('token-list').innerHTML = tokens.length
+    ? tokens.map(t => `<div class="token-row">
+        <span class="token-label">${esc(t.label)}</span>
+        <span class="token-meta">${t.last_used ? 'used ' + fmtAgo(t.last_used) : 'never used'}</span>
+        <button class="btn btn-ghost btn-xs btn-danger" data-act="revoke" data-name="${esc(t.id)}"
+          data-arg="${esc(t.label)}">Revoke</button>
+      </div>`).join('')
+    : '<div class="prog-empty"><b>No tokens</b><div>Create one to drive the harness from a script.</div></div>';
+}
+
+const fmtAgo = ts => {
+  const s = Date.now() / 1000 - ts;
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
+
+async function createToken() {
+  const label = $('token-label-input').value.trim() || 'script';
+  const r = await api('/api/tokens', {method: 'POST', body: JSON.stringify({label})});
+  if (!r?.ok) { toast('Could not create the token', 'error'); return; }
+  const {token} = await r.json();
+  $('token-label-input').value = '';
+  // Shown once, on purpose: only a hash is kept, so there is no way to show it
+  // again and no point pretending otherwise.
+  $('token-new').innerHTML = `<div class="token-new">
+    <p>Copy this now. It is not stored and cannot be shown again.</p>
+    <code>${esc(token)}</code>
+  </div>`;
+  loadTokens();
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -413,6 +653,48 @@ const HANDLERS = {
     })[next]);
   },
 
+  async tunnelquick() {
+    toast('Opening a tunnel to Cloudflare…', 'info', 4000);
+    const r = await api('/api/tunnel', {method: 'POST', body: JSON.stringify({mode: 'quick'})});
+    if (!r) return;
+    if (!r.ok) { toast(await detail(r, 'Could not start the tunnel'), 'error', 8000); return; }
+    const t = await r.json();
+    toast(t.url ? `Public at ${t.url}` : 'Tunnel starting. The address will appear shortly.',
+          'success', 6000);
+    loadTunnel(); loadPrograms();
+  },
+
+  async tunneloff() {
+    if (!confirm('Turn off the tunnel? Every global link stops working until you turn it back on.')) return;
+    const r = await api('/api/tunnel', {method: 'DELETE'});
+    if (!r?.ok) { toast('Could not turn the tunnel off', 'error'); return; }
+    toast('Tunnel off. The Pi is reachable on your LAN only.', 'success');
+    loadTunnel(); loadPrograms();
+  },
+
+  async tunnellogs() {
+    const r = await api('/api/tunnel/logs');
+    if (!r?.ok) { toast('No tunnel logs', 'error'); return; }
+    const box = $('tunnel-state');
+    const existing = document.getElementById('tunnel-log-box');
+    if (existing) { existing.remove(); return; }
+    const pre = document.createElement('pre');
+    pre.id = 'tunnel-log-box';
+    pre.className = 'prog-logs';
+    pre.style.marginLeft = '0';
+    pre.textContent = (await r.json()).logs;
+    box.after(pre);
+    pre.scrollTop = pre.scrollHeight;
+  },
+
+  async revoke(id, label) {
+    if (!confirm(`Revoke the token "${label}"? Anything using it stops working immediately.`)) return;
+    const r = await api(`/api/tokens/${encodeURIComponent(id)}`, {method: 'DELETE'});
+    if (!r?.ok) { toast('Could not revoke the token', 'error'); return; }
+    toast('Token revoked', 'success');
+    loadTokens();
+  },
+
   async monitor(name, arg) {
     const on = arg === 'true';
     const r = await api(`/api/programs/${encodeURIComponent(name)}/monitor`,
@@ -427,50 +709,32 @@ const HANDLERS = {
   },
 };
 
-// ── The prompt ────────────────────────────────────────────────────────────────
-// Hand this to any AI along with a project and the result imports cleanly.
-// Kept in sync with the copy in docs/programs.md.
-const AI_PROMPT = `Convert this project into a self-hostable, always-running program that a home
-server (PiHarness, on a Raspberry Pi) can import from GitHub and keep running
-24/7 as a background service. Apply ALL of the following:
-
-1. Long-running: the app must be a persistent process (a server or a worker
-   loop) that never exits on its own. No one-shot scripts — the supervisor
-   restarts exited processes forever, so a script that finishes becomes a
-   crash loop. Crashing on a fatal error is fine; it gets restarted.
-2. Start command: make it auto-detectable — a package.json "start" script, a
-   main.py / app.py / server.py entry file (Python), or index.js (Node). If
-   none of those fit, state the exact one-line start command in the README
-   (it runs from the repo root via bash).
-3. Dependencies: declare ALL of them in requirements.txt (Python — installed
-   into a private venv) or package.json (Node — npm install --omit=dev).
-   Nothing else gets installed for you.
-4. Config and secrets: read every key, token and setting from environment
-   variables (os.environ / process.env), with sensible defaults where
-   possible. Never commit secrets — the host injects them as env vars.
-5. If it serves a web page: listen on 0.0.0.0 at the port given by the PORT
-   environment variable (fall back to a fixed default and say what it is).
-   It is also reverse-proxied under the path /apps/<name>/, so use relative
-   URLs for every asset and link (no absolute /static/... paths), and stick
-   to plain HTTP — WebSockets and server-sent events don't pass the proxy.
-   A web page is optional; a headless worker is fine.
-6. Data: write any files or state to a path inside the app's own folder
-   (relative paths) or one taken from an env var — it runs from its cloned
-   repo directory.
-7. Finish by telling me: the GitHub repo to import, the start command (if
-   not auto-detectable), and the web port (if any).`;
+// ── The spec ───────────────────────────────────────────────────────────────────
+// Fetched from the harness instead of duplicated here. It is also quoted in
+// docs/programs.md, and three hand-maintained copies is three chances to drift.
 
 async function copyPrompt() {
+  const btn = $('prompt-btn'), label = btn.textContent;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
   try {
-    await navigator.clipboard.writeText(AI_PROMPT);
+    const r = await fetch('/api/prompt');
+    if (!r.ok) throw new Error('unavailable');
+    const spec = (await r.json()).prompt;
+    try {
+      await navigator.clipboard.writeText(spec);
+    } catch {
+      // The clipboard API needs HTTPS or localhost. Fall back for plain-HTTP LAN.
+      const ta = document.createElement('textarea');
+      ta.value = spec; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } finally { ta.remove(); }
+    }
+    toast('Spec copied. Paste it into any AI along with your project.', 'success', 3500);
   } catch {
-    // The clipboard API needs HTTPS or localhost. Fall back for plain-HTTP LAN.
-    const ta = document.createElement('textarea');
-    ta.value = AI_PROMPT; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); } finally { ta.remove(); }
+    toast('Could not load the spec', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = label;
   }
-  toast('Spec copied. Paste it into any AI along with your project.', 'success', 3500);
 }
 
 // ── Wiring ────────────────────────────────────────────────────────────────────
@@ -488,6 +752,19 @@ $('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') submit
 $('prog-import-btn').addEventListener('click', importProgram);
 $('prog-repo-input').addEventListener('keydown', e => { if (e.key === 'Enter') importProgram(); });
 $('prompt-btn').addEventListener('click', copyPrompt);
+$('token-create-btn').addEventListener('click', createToken);
+$('token-label-input').addEventListener('keydown', e => { if (e.key === 'Enter') createToken(); });
+$('tunnel-named-btn').addEventListener('click', async () => {
+  const token = $('tunnel-token-input').value.trim();
+  const hostname = $('tunnel-host-input').value.trim();
+  const r = await api('/api/tunnel', {method: 'POST',
+    body: JSON.stringify({mode: 'named', token, hostname})});
+  if (!r) return;
+  if (!r.ok) { toast(await detail(r, 'Could not connect the tunnel'), 'error', 8000); return; }
+  $('tunnel-token-input').value = '';
+  toast('Named tunnel connected', 'success');
+  loadTunnel(); loadPrograms();
+});
 $('logout-btn').addEventListener('click', logout);
 $('pass-btn').addEventListener('click', changePassword);
 $('theme-btn').addEventListener('click', () => {

@@ -29,14 +29,50 @@ def test_login_logout(authed):
     assert authed.get("/api/me").json()["username"] == "admin"
 
 
-def test_bearer_token_works_without_cookie(authed):
+def test_api_token_works_without_cookie(authed):
     from fastapi.testclient import TestClient
     from harness.main import app
 
-    token = authed.post("/api/login", json={"username": "admin", "password": "testpassword"}).json()["token"]
+    token = authed.post("/api/tokens", json={"label": "ci"}).json()["token"]
+    assert token.startswith("phk_")
+
     anon = TestClient(app)
     assert anon.get("/api/programs").status_code == 401
     assert anon.get("/api/programs", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+def test_api_token_is_revocable_and_never_shown_again(authed):
+    from fastapi.testclient import TestClient
+    from harness.main import app
+
+    token = authed.post("/api/tokens", json={"label": "throwaway"}).json()["token"]
+    listed = authed.get("/api/tokens").json()["tokens"]
+    assert [t["label"] for t in listed] == ["throwaway"]
+    assert not any(token in str(t) for t in listed)   # only metadata comes back
+
+    anon = TestClient(app)
+    assert anon.get("/api/programs", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+    assert authed.delete(f"/api/tokens/{listed[0]['id']}").status_code == 200
+    assert anon.get("/api/programs", headers={"Authorization": f"Bearer {token}"}).status_code == 401
+
+
+def test_session_token_is_not_an_api_credential(authed):
+    """A session cookie used to double as a bearer token, which made it
+    unrevocable and gave it the session's lifetime. It must not work now."""
+    from fastapi.testclient import TestClient
+    from harness import config
+    from harness.main import app
+
+    session = authed.cookies.get(config.COOKIE_NAME)
+    assert session
+    # Login no longer hands the session token back to the caller at all.
+    body = authed.post("/api/login", json={"username": "admin", "password": "testpassword"}).json()
+    assert "token" not in body
+
+    anon = TestClient(app)
+    r = anon.get("/api/programs", headers={"Authorization": f"Bearer {session}"})
+    assert r.status_code == 401
+    assert "API token" in r.json()["detail"]
 
 
 def test_login_throttled_after_repeated_failures(authed):

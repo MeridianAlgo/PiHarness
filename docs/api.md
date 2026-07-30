@@ -5,29 +5,55 @@ scripted. Interactive docs are served at `/docs` on a running harness.
 
 ## Authenticating
 
-Sign in once and use the returned bearer token. That skips the cookie and CSRF
-handling entirely.
+Scripts use an **API token**. Create one in the web UI under *API tokens*, or
+over the API from a signed-in session, then send it as a bearer token:
 
 ```bash
 HARNESS=http://piharness.local:8080
-TOKEN=$(curl -sS -X POST $HARNESS/api/login \
-          -H 'Content-Type: application/json' \
-          -d '{"username":"admin","password":"…"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
-
-curl -sS $HARNESS/api/programs -H "Authorization: Bearer $TOKEN"
+curl -sS $HARNESS/api/programs -H "Authorization: Bearer phk_…"
 ```
 
-A token lasts `HARNESS_SESSION_TTL` hours (24 by default) and dies when the
-harness restarts.
+A token does not expire, survives a harness restart, and can be revoked on its
+own without signing your browser out. It is shown once at creation and stored
+only as a hash, so a lost token is replaced rather than recovered.
+
+> **Changed in 2.0.** `/api/login` used to return the session token, and that
+> token doubled as the bearer credential. It no longer does either: session
+> tokens are rejected on the API with a 401 explaining why. Sessions are for
+> browsers, tokens are for scripts. Anything scripted against 1.x needs a token.
+
+The browser flow is unchanged: `/api/login` sets an HttpOnly session cookie, and
+cookie-authenticated writes are checked against the request Origin for CSRF.
 
 | Endpoint | Method | Auth | Purpose |
 |---|---|---|---|
 | `/api/status` | GET | none | Version, and whether first-run setup is still pending |
 | `/api/setup` | POST | none, first run only | Create the single account: `{username, password}` |
-| `/api/login` | POST | none | Sign in: `{username, password}` → `{token}` |
+| `/api/login` | POST | none | Sign in: `{username, password}`. Sets the session cookie |
 | `/api/logout` | POST | session | Drop the current session |
 | `/api/me` | GET | yes | The signed-in username |
 | `/api/password` | POST | yes | `{current_password, new_password}`. Signs out everywhere |
+| `/api/tokens` | GET | yes | List token metadata. Never returns the tokens themselves |
+| `/api/tokens` | POST | yes | `{label}` → `{token}`, shown exactly once |
+| `/api/tokens/{id}` | DELETE | yes | Revoke one token |
+
+## Limits
+
+Requests to `/api` are rate limited per client address: 240/min in general,
+20/min against `/api/login` and `/api/setup`, both configurable. Over the limit
+returns 429 with a `Retry-After` header. Request bodies above 1 MB are refused
+with 413. Proxied program traffic under `/apps/` is not rate limited.
+
+## System
+
+| Endpoint | Method | Auth | Purpose |
+|---|---|---|---|
+| `/api/metrics` | GET | yes | Host health, sampled history, and per-program resource use |
+| `/api/tunnel` | GET | yes | Cloudflare tunnel status |
+| `/api/tunnel` | POST | yes | Start: `{mode: "quick" \| "named", token?, hostname?}` |
+| `/api/tunnel` | DELETE | yes | Stop the tunnel and delete its stored token |
+| `/api/tunnel/logs` | GET | yes | Journal tail for the tunnel (`?lines=`) |
+| `/api/prompt` | GET | none | The spec for making a repo importable (see [programs.md](programs.md)) |
 
 ## Programs
 

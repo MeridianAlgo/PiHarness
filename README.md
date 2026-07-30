@@ -8,6 +8,16 @@ There's a web UI for managing them, links to any web UIs they serve, a place to
 put secrets, over-the-air updates, and a kiosk mode for a monitor plugged into
 the Pi.
 
+- **Reach it from anywhere.** One click starts a Cloudflare tunnel: a public
+  HTTPS address with no port forwarding, no static IP and nothing opened on your
+  router. Bring your own domain, or take a throwaway address.
+- **See what the Pi is doing.** CPU, temperature, memory and disk with ten
+  minutes of trend, plus per-program memory, CPU time, uptime and restart count.
+  Undervoltage and thermal throttling are called out, because they explain most
+  Pi weirdness and are otherwise invisible.
+- **Drive it from a script.** Revocable API tokens, rate limiting, and a
+  documented HTTP API.
+
 ## Install
 
 On the Pi:
@@ -39,10 +49,13 @@ Dependencies come from the repo: `requirements.txt` goes into a private venv,
 `package.json`, `main.py` / `app.py` / `server.py`, or `index.js`, and you can
 set it by hand if none of those fit.
 
-Programs that serve a web page get a LAN link on their card. Set
-`HARNESS_PUBLIC_URL` or run Tailscale and they also get a link at
-`/apps/<name>/`, reverse-proxied through the harness. Those are public by
-default; one click makes them require a sign-in.
+Programs that serve a web page get a LAN link on their card. Turn on a
+Cloudflare tunnel (or set `HARNESS_PUBLIC_URL`, or run Tailscale) and they also
+get a link at `/apps/<name>/`, reverse-proxied through the harness. Those links
+are **private by default**: they need a harness sign-in until you publish one
+deliberately, because a tunnel makes "public" mean the whole internet. The proxy
+strips the harness's own session cookie and API tokens from anything it forwards,
+so an imported program can never see the credentials of whoever is browsing it.
 
 Secrets are `KEY=VALUE` lines per program, stored `0600` at
 `/etc/piharness/program-env/<name>.env` and injected as environment variables at

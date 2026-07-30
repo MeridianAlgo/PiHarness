@@ -9,39 +9,94 @@ driving the harness from a script, not for writing a program.
 
 ## The AI prompt
 
-Paste this into any AI along with your code, or click **Copy prompt** in the web
+Paste this into any AI along with your code, or click **Copy spec** in the web
 UI. What comes back imports cleanly.
 
-```text
-Convert this project into a self-hostable, always-running program that a home
-server (PiHarness, on a Raspberry Pi) can import from GitHub and keep running
-24/7 as a background service. Apply ALL of the following:
+The harness serves this same text at `GET /api/prompt`, unauthenticated, so you
+can pipe it straight into a tool:
 
-1. Long-running: the app must be a persistent process (a server or a worker
-   loop) that never exits on its own. No one-shot scripts — the supervisor
-   restarts exited processes forever, so a script that finishes becomes a
-   crash loop. Crashing on a fatal error is fine; it gets restarted.
-2. Start command: make it auto-detectable — a package.json "start" script, a
-   main.py / app.py / server.py entry file (Python), or index.js (Node). If
-   none of those fit, state the exact one-line start command in the README
-   (it runs from the repo root via bash).
-3. Dependencies: declare ALL of them in requirements.txt (Python — installed
-   into a private venv) or package.json (Node — npm install --omit=dev).
-   Nothing else gets installed for you.
-4. Config and secrets: read every key, token and setting from environment
-   variables (os.environ / process.env), with sensible defaults where
-   possible. Never commit secrets — the host injects them as env vars.
-5. If it serves a web page: listen on 0.0.0.0 at the port given by the PORT
-   environment variable (fall back to a fixed default and say what it is).
-   It is also reverse-proxied under the path /apps/<name>/, so use relative
-   URLs for every asset and link (no absolute /static/... paths), and stick
-   to plain HTTP — WebSockets and server-sent events don't pass the proxy.
-   A web page is optional; a headless worker is fine.
-6. Data: write any files or state to a path inside the app's own folder
-   (relative paths) or one taken from an env var — it runs from its cloned
-   repo directory.
-7. Finish by telling me: the GitHub repo to import, the start command (if
-   not auto-detectable), and the web port (if any).
+```bash
+curl -sS http://piharness.local:8080/api/prompt | python3 -c 'import json,sys; print(json.load(sys.stdin)["prompt"])'
+```
+
+```text
+Convert this project into an always-on program that PiHarness can import from
+GitHub and supervise on a Raspberry Pi. PiHarness clones the repo, installs the
+dependencies it declares, writes a systemd unit with Restart=always, and runs it
+24/7. Apply ALL of the following, then tell me what you changed.
+
+1. LONG-RUNNING PROCESS
+   The entry point must be a process that stays alive: a server, or a worker with
+   its own scheduling loop. It must never exit on success. The supervisor
+   restarts anything that exits, so a script that finishes its work and returns 0
+   becomes a restart loop that burns the CPU forever. If the work is periodic, do
+   NOT rely on cron or a one-shot run: sleep inside the process between cycles.
+   Exiting non-zero on an unrecoverable error is correct and expected; it will be
+   restarted after 5 seconds.
+
+2. START COMMAND
+   Make it auto-detectable, in this order of preference:
+     - Node: a "start" script in package.json, or index.js at the repo root
+     - Python: main.py, app.py or server.py at the repo root
+   If none fits, state the exact one-line command in the README. It runs from the
+   repo root through `bash -lc`, as root, with no shell aliases available.
+
+3. DEPENDENCIES
+   Declare every dependency in requirements.txt (Python; installed into a private
+   venv next to the clone) or package.json (Node; `npm install --omit=dev`).
+   Nothing else is installed. Do not assume system packages, a global pip, a
+   compiler toolchain, or anything preinstalled beyond python3, node and git.
+   Prefer pure-Python wheels: the Pi is ARM and building from source is slow.
+
+4. CONFIGURATION AND SECRETS
+   Read every key, token, path and tunable from environment variables
+   (os.environ / process.env), each with a sensible default where one exists.
+   Never commit a secret and never read one from a file in the repo: PiHarness
+   injects them as environment variables from storage outside the clone. Fail
+   fast and loudly at startup if a required variable is missing, naming the
+   variable.
+
+5. IF IT SERVES A WEB UI
+   Listen on 0.0.0.0 at the port in the PORT environment variable, falling back
+   to a fixed default that you state in the README. The app is also reverse
+   proxied at /apps/<name>/, so:
+     - use relative URLs for every asset, link and API call (no absolute /static/…
+       paths, which break under the prefix)
+     - plain HTTP request/response only. WebSockets and server-sent events do not
+       pass through the proxy; poll instead if you need live updates
+   A web UI is optional. A headless worker is a first-class program.
+
+6. LOGGING
+   Write to stdout and stderr, unbuffered, and nothing else. Do not write log
+   files, do not rotate logs, do not require a log directory. The output is
+   captured by journald and shown in the PiHarness UI. In Python, either set
+   PYTHONUNBUFFERED or call print(..., flush=True); a buffered process appears
+   silent for minutes, which looks like a hang.
+
+7. SHUTDOWN
+   Handle SIGTERM: stop accepting work, finish or abandon what is in flight, and
+   exit within a few seconds. systemd sends SIGTERM on stop, restart and update,
+   then SIGKILLs after a timeout. Anything not flushed by then is lost.
+
+8. STATE ON DISK
+   Write files only to paths inside the app's own directory (use relative paths
+   or a directory from an env var). The clone is the working directory. Anything
+   written elsewhere may be outside the backup and will not survive a re-import.
+   Be aware that `git pull` runs on update: never write into a tracked path, or
+   the update will conflict and fail.
+
+9. RESOURCE BEHAVIOUR
+   This shares a Pi with other programs. Do not busy-wait, do not poll a remote
+   API more than once a minute without a reason, and do not hold large data
+   structures in memory. The unit runs at Nice=15 with a reduced CPU weight, so
+   a greedy loop will not freeze the Pi, but it will heat it and throttle
+   everything. Sleep between cycles.
+
+10. FINALLY, TELL ME
+    - the GitHub repository to import
+    - the start command, if it is not auto-detectable
+    - the web port, if it serves a web UI
+    - every environment variable it needs, which are required, and what each does
 ```
 
 ## Requirements
@@ -108,19 +163,50 @@ A program listening on its web port (which is also handed to it as the `PORT`
 environment variable, so honor that if you can) gets:
 
 - A LAN link, `http://<pi-address>:<port>`, for devices on your network.
-- A global link, `https://<host>/apps/<name>/`, proxied through the harness. The
-  host comes from `HARNESS_PUBLIC_URL` if you've set one, otherwise from
-  Tailscale when it's running, in which case the link works on any device signed
-  in to your tailnet.
+- A global link, `https://<host>/apps/<name>/`, proxied through the harness.
 
-The global link is public by default, since sharing it is usually the point.
-Flip the chip on the card to make it require a sign-in.
+The host for the global link is resolved in this order:
+
+1. `HARNESS_PUBLIC_URL`, if you set one.
+2. A **Cloudflare tunnel**, if one is running. Turn it on under *Remote access*
+   in the web UI. This needs no port forwarding, no static IP and no inbound
+   hole in your router: `cloudflared` dials out to Cloudflare and traffic comes
+   back down that connection.
+3. Tailscale, if it's running, in which case the link works on any device signed
+   in to your tailnet.
+
+Two tunnel modes:
+
+| Mode | Needs | Address |
+|---|---|---|
+| Quick | nothing | A random `*.trycloudflare.com` name, **regenerated every restart**. Fine for a look, useless as a bookmark. |
+| Named | A Cloudflare account and a connector token | Your own hostname, stable across restarts and reboots. |
+
+For a named tunnel, create one in Cloudflare Zero Trust under *Networks →
+Tunnels*, route your hostname to `http://localhost:8080`, and paste the
+connector token into *Remote access*. The token is stored at
+`/etc/piharness/tunnel.env` with mode 0600 and passed to `cloudflared` as an
+environment variable, so it never appears in the unit file or in `ps` output.
+
+> **A program is private until you publish it.** A private program's global link
+> requires a harness sign-in; only when you flip the chip on its card to
+> **Public** does the link work without one. This is the opposite of the 1.x
+> default, and it changed because a tunnel makes "public" mean *the entire
+> internet* rather than *anyone already on your LAN*. Existing programs that
+> were relying on the old default need the chip flipped once after upgrading.
 
 Two things the global link can't do that the LAN link can:
 
 - Serve pages that reference assets by absolute path. `/static/app.js` will 404
   under `/apps/<name>/`. Use relative paths or make the base path configurable.
+  The proxy sets `X-Forwarded-Prefix`, so a framework that understands it can
+  build correct URLs on its own.
 - Carry WebSockets or server-sent events. Plain HTTP only.
+
+The proxy strips the harness's own session cookie and API tokens from anything
+it forwards, so a program can never see the credentials of the person browsing
+it. Your program's own cookies and `Authorization` headers pass through
+untouched.
 
 ## Show on a monitor
 
@@ -288,3 +374,35 @@ because a blanket cap breaks the programs that legitimately need a whole core.
 - Access tokens reach git as in-memory environment config, so they never touch
   the clone's `.git/config`, the stored repo URL, process argv or an API
   response.
+
+### The boundary around a proxied program
+
+A program is third-party code served from the harness's own origin, so the
+proxy treats it as untrusted in both directions:
+
+- The harness session cookie and any harness API token are **removed** from
+  requests before they reach a program. Without this, any imported program could
+  read `harness_session` from the forwarded `Cookie` header and act as you. The
+  program's own cookies and a non-harness `Authorization` header are forwarded
+  unchanged.
+- A `Set-Cookie` from a program that tries to set the harness session cookie is
+  **dropped**, so a program can't sign you out or pin a session of its choosing.
+- Programs are private by default; the global link needs a sign-in until you
+  publish one deliberately.
+
+### Exposing the harness to the internet
+
+Turning on a tunnel puts the sign-in page on the public internet. What protects
+it:
+
+- argon2 password hashing, and a per-IP lockout after 8 failed sign-ins.
+- Rate limiting on `/api` (240/min, and 20/min on sign-in).
+- The session cookie is automatically marked `Secure` while a tunnel is up, and
+  HSTS is sent, so the browser will not send it over plain HTTP. Neither is set
+  on a LAN-only install, where pinning HSTS to a hostname with no certificate
+  would lock you out of your own Pi.
+- Sessions are HttpOnly and in memory: restarting the harness signs out every
+  browser. API tokens survive a restart and are revoked individually.
+
+Use a long password, and prefer a named tunnel behind Cloudflare Access if you
+want an identity check in front of the sign-in page at all.

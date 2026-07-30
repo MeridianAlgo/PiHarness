@@ -17,11 +17,19 @@ def tmp_paths(tmp_path, monkeypatch):
     (tmp_path / "units").mkdir()
 
     # Modules captured `config` as a module object, so reloading it is enough —
-    # but the auth session table and import registry are process state.
-    from harness import auth, programs
+    # but sessions, throttles, rate-limit counters, sampled metrics and the
+    # import registry are all process state that would otherwise leak between
+    # tests. The rate limiter especially: every test signs in from the same
+    # client address, so without this the suite throttles itself.
+    from harness import auth, main, metrics, programs
     auth._sessions.clear()
     auth._attempts.clear()
+    auth._requests.clear()
     programs._imports.clear()
+    metrics._prev_cpu = None
+    for series in metrics._history.values():
+        series.clear()
+    main._public_cache[0] = 0.0
     return tmp_path
 
 

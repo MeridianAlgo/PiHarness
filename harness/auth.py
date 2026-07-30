@@ -1,7 +1,9 @@
 """
-Sign-in: one argon2-hashed credential file, in-memory sessions, and a per-IP
-throttle on failed logins. Restarting the harness signs everyone out.
+Sign-in: one argon2-hashed credential file, in-memory sessions, revocable API
+tokens for scripts, and a per-IP throttle on failed logins. Restarting the
+harness signs everyone out of the browser but leaves API tokens working.
 """
+import hashlib
 import json
 import os
 import secrets
@@ -134,20 +136,147 @@ def throttle_reset(ip: str) -> None:
     _attempts.pop(ip, None)
 
 
+# ── API tokens ────────────────────────────────────────────────────────────────
+# Scripts used to authenticate by replaying the session token handed back by
+# /api/login. That token is also the browser's cookie value, so it could not be
+# revoked without signing the browser out, it inherited the session's expiry,
+# and it was stored in plaintext by whatever called it. These are separate:
+# independently revocable, no expiry, and only a hash is kept on the Pi.
+#
+# sha256 rather than argon2 on purpose. Argon2 exists to make low-entropy
+# passwords expensive to guess; these carry 256 bits of randomness, so there is
+# nothing to brute force and a slow hash would only add latency to every request.
+
+TOKEN_PREFIX = "phk_"
+
+
+def _token_file():
+    return config.CONFIG_DIR / "api-tokens.json"
+
+
+def _load_tokens() -> dict:
+    try:
+        return json.loads(_token_file().read_text())
+    except Exception:   # noqa: BLE001 - missing or corrupt reads as "none issued"
+        return {}
+
+
+def _save_tokens(data: dict) -> None:
+    config.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _token_file().write_text(json.dumps(data, indent=2))
+    os.chmod(_token_file(), 0o600)
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_api_token(username: str, label: str) -> str:
+    """Mint a token and return it in the clear. This is the only time it can be
+    read; only its hash is stored."""
+    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    data = _load_tokens()
+    data[_hash_token(token)] = {
+        "label": label[:60] or "unnamed",
+        "user": username,
+        "created": time.time(),
+        "last_used": None,
+    }
+    _save_tokens(data)
+    return token
+
+
+def list_api_tokens() -> list[dict]:
+    """Metadata only. The tokens themselves are not recoverable."""
+    return sorted(
+        ({"id": h[:12], "label": v.get("label"), "created": v.get("created"),
+          "last_used": v.get("last_used")} for h, v in _load_tokens().items()),
+        key=lambda t: t.get("created") or 0, reverse=True)
+
+
+def revoke_api_token(token_id: str) -> bool:
+    data = _load_tokens()
+    for h in list(data):
+        if h.startswith(token_id):
+            del data[h]
+            _save_tokens(data)
+            return True
+    return False
+
+
+def validate_api_token(token: Optional[str]) -> Optional[str]:
+    if not token or not token.startswith(TOKEN_PREFIX):
+        return None
+    data = _load_tokens()
+    digest = _hash_token(token)
+    # Compare against every stored hash in constant time. The set is tiny, and
+    # a dict lookup on a hash of a secret is already not a timing oracle worth
+    # worrying about — this just removes the question.
+    matched = None
+    for stored, record in data.items():
+        if secrets.compare_digest(stored, digest):
+            matched = (stored, record)
+    if not matched:
+        return None
+    stored, record = matched
+    record["last_used"] = time.time()
+    data[stored] = record
+    _save_tokens(data)
+    return record.get("user")
+
+
+# ── Request rate limit ────────────────────────────────────────────────────────
+# The login throttle above only guards the password. This guards everything
+# else: a valid token that leaks, or an authenticated client stuck in a retry
+# loop, should not be able to hammer git and systemctl without limit.
+
+_requests: dict[str, list] = {}   # ip -> [count, window_start]
+
+
+def rate_limit(ip: str, limit: int, window: int = 60) -> Optional[int]:
+    """None when the request may proceed, else seconds until the window resets."""
+    now = time.time()
+    rec = _requests.get(ip)
+    if not rec or now - rec[1] >= window:
+        _requests[ip] = [1, now]
+        # Opportunistically drop stale entries so this can't grow without bound
+        # when traffic comes from many addresses.
+        if len(_requests) > 2048:
+            for k in [k for k, v in _requests.items() if now - v[1] >= window]:
+                _requests.pop(k, None)
+        return None
+    rec[0] += 1
+    if rec[0] > limit:
+        return max(1, int(window - (now - rec[1])))
+    return None
+
+
 # ── Dependency ────────────────────────────────────────────────────────────────
 
 def require_auth(
     harness_session: Optional[str] = Cookie(default=None),
     authorization: Optional[str] = Header(default=None),
 ) -> str:
-    """The signed-in username, or 401. Takes either the browser's session
-    cookie or `Authorization: Bearer <token>` for scripts."""
-    token = harness_session
-    if not token and authorization and authorization.startswith("Bearer "):
-        token = authorization[7:]
-    if not token:
+    """The signed-in username, or 401. Takes the browser's session cookie, or
+    `Authorization: Bearer phk_…` for scripts."""
+    bearer = None
+    if authorization and authorization.startswith("Bearer "):
+        bearer = authorization[7:].strip()
+    if bearer:
+        user = validate_api_token(bearer)
+        if user:
+            return user
+        # A session token presented as a bearer is no longer accepted: tokens
+        # and sessions are separate credentials now. Say so, rather than 401ing
+        # a script whose author has no way to guess why.
+        if validate_session(bearer):
+            raise HTTPException(
+                401, "Session tokens are no longer valid for the API. "
+                     "Create an API token in Settings and send that instead.")
+        raise HTTPException(401, "Invalid API token")
+    if not harness_session:
         raise HTTPException(401, "Not authenticated")
-    user = validate_session(token)
+    user = validate_session(harness_session)
     if not user:
         raise HTTPException(401, "Session expired or invalid")
     return user

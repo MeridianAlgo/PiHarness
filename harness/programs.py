@@ -282,7 +282,9 @@ def start_import(name: str, url: str, req) -> None:
             "web_port": req.web_port,
             "monitor_command": (req.monitor_command or "").strip() or None,
             "token": (req.token or "").strip() or None,
-            "public": True,
+            # Private until published: with a tunnel up, a public default would
+            # expose a program to the internet the moment it finishes importing.
+            "public": False,
             "ota": req.ota,
             "status": "importing",
             "created": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -361,12 +363,19 @@ def remove(name: str, prog: dict) -> None:
 # ── Public links ──────────────────────────────────────────────────────────────
 
 def public_base() -> tuple[Optional[str], Optional[str]]:
-    """(public https origin, via) for the /apps/<name>/ links. A configured
-    HARNESS_PUBLIC_URL wins, otherwise Tailscale is autodetected, which makes
-    the link work on any device signed in to the tailnet."""
+    """(public https origin, via) for the /apps/<name>/ links.
+
+    Order: an explicitly configured HARNESS_PUBLIC_URL, then a running Cloudflare
+    tunnel, then Tailscale. Configuration wins because someone who set it meant
+    it; the tunnel outranks Tailscale because it reaches the whole internet
+    rather than one tailnet."""
     if config.PUBLIC_URL:
         url = config.PUBLIC_URL
         return (url if url.startswith("http") else f"https://{url}"), "configured"
+    from harness import tunnel   # lazy — tunnel imports this module
+    tunnel_url = tunnel.public_url()
+    if tunnel_url:
+        return tunnel_url, "cloudflare"
     code, out = _run(["tailscale", "status", "--json"], timeout=5)
     if code == 0:
         try:
@@ -404,7 +413,7 @@ def listing() -> list[dict]:
             "repo_url": prog["repo_url"],
             "start_command": prog.get("start_command"),
             "web_port": prog.get("web_port"),
-            "public": prog.get("public", True),
+            "public": prog.get("public", False),
             "ota": prog.get("ota", "github"),
             "status": status,
             "phase": importing.get("phase") if importing else None,

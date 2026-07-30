@@ -34,6 +34,23 @@ PUBLIC_URL = os.environ.get("HARNESS_PUBLIC_URL", "").rstrip("/")
 # How often the unattended updater checks GitHub for programs on ota="auto".
 AUTO_UPDATE_INTERVAL = int(os.environ.get("HARNESS_AUTO_UPDATE_INTERVAL", str(6 * 3600)))
 
+# How often host metrics are sampled into the in-memory history the dashboard
+# draws. 5s over 120 points is 10 minutes of trend, which is the window that
+# answers "is it climbing right now".
+METRICS_INTERVAL = int(os.environ.get("HARNESS_METRICS_INTERVAL", "5"))
+
+# Requests per minute per IP against /api, before a 429. Generous enough that
+# the dashboard polling plus a person clicking never hits it, low enough that a
+# leaked token can't drive git and systemctl in a loop.
+RATE_LIMIT = int(os.environ.get("HARNESS_RATE_LIMIT", "240"))
+# Sign-in is separately and much more tightly limited; auth.py's throttle
+# handles repeated failures, this caps the raw attempt rate.
+RATE_LIMIT_LOGIN = int(os.environ.get("HARNESS_RATE_LIMIT_LOGIN", "20"))
+
+# Largest request body accepted, in bytes. The biggest legitimate one is a
+# secrets blob, capped at 32 KB by the endpoint itself.
+MAX_BODY_BYTES = int(os.environ.get("HARNESS_MAX_BODY", str(1024 * 1024)))
+
 UI_DIR = Path(__file__).parent.parent / "ui"
 
 _raw_origins = os.environ.get("HARNESS_CORS_ORIGINS", "")
