@@ -53,7 +53,7 @@ for bin in python3.12 python3.11 python3.10 python3.9 python3; do
 done
 if [[ -z "$PYTHON_BIN" ]]; then
   warn "Python 3.9+ not found — installing python3…"
-  apt-get update -qq
+  apt-get update -qq || true
   apt-get install -y --no-install-recommends python3 python3-venv python3-dev \
     || die "Could not install Python 3.9+. Upgrade the OS and try again."
   PYTHON_BIN="python3"
@@ -63,7 +63,9 @@ info "Using $PYTHON_BIN ($("$PYTHON_BIN" --version))"
 # ── System packages ──────────────────────────────────────────────────────────
 section "System packages"
 step "Updating package lists…"
-apt-get update -qq
+# A broken third-party repo (e.g. a stale cloudflared list with no trixie
+# suite) must not kill the install — everything we need is in the main repos.
+apt-get update -qq || warn "Some package lists failed to refresh — continuing"
 # git and node cover cloning and Node programs; the venv module builds each
 # Python program's private virtualenv.
 apt-get install -y --no-install-recommends \
