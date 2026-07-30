@@ -9,10 +9,19 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
   .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// Drawn, not typed: emoji render differently per platform and can't be themed.
+const TOAST_ICON = {
+  success: '<path d="M20 6 9 17l-5-5"/>',
+  error:   '<path d="M18 6 6 18M6 6l12 12"/>',
+  info:    '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+};
+
 function toast(msg, type = 'info', dur = 3500) {
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<span>${({success: '✓', error: '✕', info: 'ℹ'})[type] || ''}</span><span>${esc(msg)}</span>`;
+  el.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+    >${TOAST_ICON[type] || TOAST_ICON.info}</svg><span>${esc(msg)}</span>`;
   $('toast-container').appendChild(el);
   setTimeout(() => {
     el.style.transition = 'opacity 0.3s'; el.style.opacity = '0';
@@ -58,7 +67,7 @@ async function boot() {
     setupMode = !!st.setup_required;
   } catch { setupMode = false; }
   if (setupMode) {
-    $('login-sub').textContent = 'First run — create your account';
+    $('login-sub').textContent = 'First run: create your account';
     $('login-btn').textContent = 'Create account';
     $('setup-note').classList.remove('hidden');
     $('login-pass').setAttribute('autocomplete', 'new-password');
@@ -110,7 +119,7 @@ async function changePassword() {
     method: 'POST', body: JSON.stringify({current_password: current, new_password: next})});
   if (!r) return;
   if (!r.ok) { toast(await detail(r, 'Could not change the password'), 'error', 5000); return; }
-  toast('Password changed — signing you out', 'success', 2500);
+  toast('Password changed. Signing you out.', 'success', 2500);
   setTimeout(() => location.reload(), 1200);
 }
 
@@ -138,9 +147,8 @@ async function loadPrograms() {
 
   if (!progs.length) {
     box.innerHTML = `<div class="prog-empty">
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-      <b>No programs yet</b>
-      <div>Paste a GitHub repository above to import your first one.</div>
+      <b>Nothing installed</b>
+      <div>Import a GitHub repository above and it will appear here.</div>
     </div>`;
     return;
   }
@@ -167,8 +175,8 @@ async function checkUpdates() {
 
 const OTA_META = {
   github: {label: 'GitHub', cls: '', title: 'The harness checks GitHub for new commits and flags them here. Click to auto-apply them.'},
-  auto:   {label: 'Auto', cls: '', title: 'New commits are pulled and restarted on their own — no clicking. Click to switch to self-managed.'},
-  self:   {label: 'Self-managed', cls: 'private', title: 'This program runs its own updater — the harness stays out of the way. Click to check GitHub again.'},
+  auto:   {label: 'Auto', cls: '', title: 'New commits are pulled and restarted on their own. Click to switch to self-managed.'},
+  self:   {label: 'Self-managed', cls: 'private', title: 'This program runs its own updater and the harness stays out of the way. Click to check GitHub again.'},
 };
 
 // Card buttons carry data-act (which handler) and data-name (which program).
@@ -187,7 +195,7 @@ function card(p, mon) {
     links += `<a class="prog-chip" href="${esc(lanUrl)}" target="_blank" rel="noopener" title="Open on your local network">
       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>LAN · :${p.web_port}</a>`;
     links += p.global_url
-      ? `<a class="prog-chip global" href="${esc(p.global_url)}" target="_blank" rel="noopener" title="${p.global_via === 'tailscale' ? 'Link through Tailscale — works on any device signed in to your tailnet' : 'Link through the harness’s public address'}">
+      ? `<a class="prog-chip global" href="${esc(p.global_url)}" target="_blank" rel="noopener" title="${p.global_via === 'tailscale' ? 'Link through Tailscale. Works on any device signed in to your tailnet.' : 'Link through the harness’s public address'}">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>Global${p.global_via === 'tailscale' ? ' · Tailscale' : ''}</a>
          <button class="prog-chip toggle ${p.public ? '' : 'private'}" ${act('public', p.name, p.public)} title="${p.public ? 'Anyone with the link can open it. Click to require a sign-in.' : 'Sign-in required. Click to make the link public.'}">${p.public ? 'Public' : 'Private'}</button>`
       : `<span class="prog-chip dim" title="Set HARNESS_PUBLIC_URL, or run Tailscale, to get a link that works away from home">Global link needs a public address or Tailscale</span>`;
@@ -196,12 +204,12 @@ function card(p, mon) {
   // turning it on arms the kiosk to display when one is plugged in.
   if (settled && p.web_port) {
     links += `<button class="prog-chip toggle ${p.on_monitor ? '' : 'dim'}" ${act('monitor', p.name, p.on_monitor)}
-      title="${p.on_monitor ? 'Showing fullscreen on the Pi’s monitor. Click to turn off.' : mon?.connected ? 'Show this program fullscreen on the monitor plugged into the Pi.' : 'No monitor detected right now — turning this on shows the program the moment one is plugged in.'}">
+      title="${p.on_monitor ? 'Showing fullscreen on the Pi’s monitor. Click to turn off.' : mon?.connected ? 'Show this program fullscreen on the monitor plugged into the Pi.' : 'No monitor detected. Turning this on shows the program the moment one is plugged in.'}">
       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>${p.on_monitor ? 'On monitor' : 'Show on monitor'}</button>`;
   }
   if (settled && p.has_token) {
     links += `<button class="prog-chip toggle private" ${act('token', p.name)}
-      title="Cloned with a GitHub access token — update checks and pulls use it too. Click to replace or remove it.">
+      title="Cloned with a GitHub access token, used for update checks and pulls too. Click to replace or remove it.">
       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>Private repo</button>`;
   }
   if (settled) {
@@ -220,9 +228,9 @@ function card(p, mon) {
   const manageButtons = p.status === 'error' ? '' : `
     ${p.ota !== 'self' ? `<button class="btn btn-ghost btn-xs" data-updbtn="${esc(p.name)}" ${act('update', p.name)} title="git pull the latest code, reinstall dependencies, restart">Update</button>` : ''}
     <button class="btn btn-ghost btn-xs" ${act('secrets', p.name)} title="KEY=VALUE environment variables, stored on the Pi and injected at start">Secrets</button>
-    ${p.web_port ? `<button class="btn btn-ghost btn-xs" ${act('moncmd', p.name, p.monitor_command || '')} title="Optional command run every time this program goes on the monitor">Monitor cmd${p.monitor_command ? ' ·✓' : ''}</button>` : ''}
-    ${!p.has_token ? `<button class="btn btn-ghost btn-xs" ${act('token', p.name)} title="Repo gone private? Add a GitHub access token — update checks and pulls will use it">Add token</button>` : ''}
-    <button class="btn btn-ghost btn-xs" ${act('port', p.name, p.web_port ?? '')} title="The port the program's web UI listens on — the LAN link, global link and kiosk all point here">Web port${p.web_port ? ` · ${p.web_port}` : ''}</button>
+    ${p.web_port ? `<button class="btn btn-ghost btn-xs" ${act('moncmd', p.name, p.monitor_command || '')} title="Optional command run every time this program goes on the monitor">Monitor cmd${p.monitor_command ? ' · set' : ''}</button>` : ''}
+    ${!p.has_token ? `<button class="btn btn-ghost btn-xs" ${act('token', p.name)} title="Repo gone private? Add a GitHub access token for update checks and pulls.">Add token</button>` : ''}
+    <button class="btn btn-ghost btn-xs" ${act('port', p.name, p.web_port ?? '')} title="The port the program's web UI listens on. The LAN link, global link and kiosk all point here.">Web port${p.web_port ? ` · ${p.web_port}` : ''}</button>
     <button class="btn btn-ghost btn-xs" ${act('logs', p.name)}>Logs</button>`;
 
   const actions = p.status === 'importing' ? '' : `<div class="prog-actions">
@@ -230,16 +238,16 @@ function card(p, mon) {
       <button class="btn btn-ghost btn-xs btn-danger" ${act('remove', p.name)}>Remove</button>
     </div>`;
 
-  return `<div class="prog-card">
+  return `<div class="prog-card ${st.cls}">
     <div class="prog-head">
       <span class="prog-led ${st.cls}"></span>
       <span class="prog-name">${esc(p.name)}</span>
       <span class="prog-badge ${st.cls}">${p.status === 'importing' && p.phase ? esc(p.phase) + '…' : st.label}</span>
-      <span class="prog-badge upd hidden" data-upd="${esc(p.name)}" title="A newer commit is on GitHub — click Update to pull it">Update available</span>
+      <span class="prog-badge upd hidden" data-upd="${esc(p.name)}" title="A newer commit is on GitHub. Click Update to pull it.">Update available</span>
       <a class="prog-repo" href="${esc(p.repo_url)}" target="_blank" rel="noopener" title="Open the repository on GitHub">${esc(repoPath)}</a>
     </div>
     ${p.start_command && p.status !== 'importing'
-      ? `<div class="prog-cmd" ${act('command', p.name, p.start_command)} title="Start command — click to change">$ ${esc(p.start_command)}</div>` : ''}
+      ? `<div class="prog-cmd" ${act('command', p.name, p.start_command)} title="Start command. Click to change.">${esc(p.start_command)}</div>` : ''}
     ${p.error && (p.status === 'error' || p.status === 'failed') ? `<div class="prog-err">${esc(p.error)}</div>` : ''}
     ${links ? `<div class="prog-links">${links}</div>` : ''}
     ${actions}
@@ -276,7 +284,7 @@ async function importProgram() {
     if (!r.ok) { toast(await detail(r, 'Import failed'), 'error', 5000); return; }
     ['prog-repo-input', 'prog-name-input', 'prog-cmd-input', 'prog-port-input', 'prog-token-input']
       .forEach(id => $(id).value = '');
-    toast(`Importing ${(await r.json()).name} — cloning from GitHub…`, 'info', 3500);
+    toast(`Importing ${(await r.json()).name}, cloning from GitHub`, 'info', 3500);
     loadPrograms();
   } finally {
     btn.disabled = false; btn.textContent = 'Import';
@@ -320,7 +328,7 @@ async function saveSecrets(name) {
   if (!r) return;
   if (!r.ok) { toast(await detail(r, 'Could not save secrets'), 'error', 5000); return; }
   toast((await r.json()).restarted
-    ? 'Secrets saved — program restarted with the new values' : 'Secrets saved', 'success', 3000);
+    ? 'Secrets saved. Program restarted with the new values.' : 'Secrets saved', 'success', 3000);
   box.classList.add('hidden');
 }
 
@@ -343,7 +351,7 @@ const HANDLERS = {
   savesecrets: name => saveSecrets(name),
 
   async update(name) {
-    toast(`Updating ${name} from GitHub…`, 'info', 2500);
+    toast(`Updating ${name} from GitHub`, 'info', 2500);
     const r = await api(`/api/programs/${encodeURIComponent(name)}/update`, {method: 'POST'});
     if (!r) return;
     if (!r.ok) { toast(await detail(r, 'Update failed'), 'error', 6000); return; }
@@ -361,47 +369,47 @@ const HANDLERS = {
   },
 
   command(name, current) {
-    const cmd = prompt(`Start command for "${name}" — runs from the program's folder:`, current || '');
+    const cmd = prompt(`Start command for "${name}". Runs from the program's folder:`, current || '');
     if (cmd == null) return;
     edit(name, {start_command: cmd}, 'Start command saved');
   },
 
   moncmd(name, current) {
-    const cmd = prompt(`Monitor command for "${name}" — runs from the program's folder every time it goes on the monitor. Leave empty to remove:`, current || '');
+    const cmd = prompt(`Monitor command for "${name}". Runs from the program's folder every time it goes on the monitor. Leave empty to remove:`, current || '');
     if (cmd == null) return;
     edit(name, {monitor_command: cmd},
-      cmd.trim() ? 'Monitor command saved — it runs on every kiosk start' : 'Monitor command removed');
+      cmd.trim() ? 'Monitor command saved. It runs on every kiosk start.' : 'Monitor command removed');
   },
 
   token(name) {
-    const t = prompt(`GitHub access token for "${name}" — used for update checks and pulls. Leave empty to remove it:`);
+    const t = prompt(`GitHub access token for "${name}", used for update checks and pulls. Leave empty to remove it:`);
     if (t == null) return;
     edit(name, {token: t},
-      t.trim() ? 'Token saved — it stays on the Pi and is never shown again' : 'Token removed');
+      t.trim() ? 'Token saved. It stays on the Pi and is never shown again.' : 'Token removed');
   },
 
   port(name, current) {
-    const v = prompt(`Web port for "${name}" — the port its web UI actually listens on (1024–65535). Leave empty to remove the web links:`, current || '');
+    const v = prompt(`Web port for "${name}". The port its web UI actually listens on (1024–65535). Leave empty to remove the web links:`, current || '');
     if (v == null) return;
     const port = parseInt(v, 10);
     if (v.trim() !== '' && !(port >= 1024 && port <= 65535)) { toast('Port must be 1024–65535', 'error'); return; }
     edit(name, v.trim() === '' ? {clear_port: true} : {web_port: port},
-      v.trim() ? `Web port set to ${port} — links and the kiosk now point there` : 'Web port removed');
+      v.trim() ? `Web port set to ${port}. Links and the kiosk now point there.` : 'Web port removed');
   },
 
   public(name, arg) {
     const next = arg !== 'true';
     edit(name, {public: next}, next
-      ? 'Link is public — anyone with it can open the program'
-      : 'Link is private — a harness sign-in is required');
+      ? 'Link is public. Anyone with it can open the program.'
+      : 'Link is private. A sign-in is required.');
   },
 
   ota(name, current) {
     const next = ({github: 'auto', auto: 'self', self: 'github'})[current] || 'github';
     edit(name, {ota: next}, ({
       github: `The harness now checks GitHub for ${name} updates`,
-      auto:   `${name} will now update itself automatically — no clicking`,
-      self:   `${name} now manages its own updates — the harness will stop checking`,
+      auto:   `${name} will now update itself automatically.`,
+      self:   `${name} now manages its own updates. The harness will stop checking.`,
     })[next]);
   },
 
@@ -462,7 +470,7 @@ async function copyPrompt() {
     document.body.appendChild(ta); ta.select();
     try { document.execCommand('copy'); } finally { ta.remove(); }
   }
-  toast('Prompt copied — paste it into any AI along with your project', 'success', 3500);
+  toast('Spec copied. Paste it into any AI along with your project.', 'success', 3500);
 }
 
 // ── Wiring ────────────────────────────────────────────────────────────────────
