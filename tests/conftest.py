@@ -1,0 +1,57 @@
+import importlib
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def tmp_paths(tmp_path, monkeypatch):
+    """Point every on-disk path at this test's temp dir, so nothing touches the
+    real /etc or /opt and no state leaks between tests."""
+    monkeypatch.setenv("HARNESS_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("HARNESS_PROGRAMS_DIR", str(tmp_path / "programs"))
+    monkeypatch.setenv("HARNESS_UNIT_DIR", str(tmp_path / "units"))
+    monkeypatch.setenv("HARNESS_PUBLIC_URL", "")
+
+    from harness import config
+    importlib.reload(config)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "units").mkdir()
+
+    # Modules captured `config` as a module object, so reloading it is enough —
+    # but the auth session table and import registry are process state.
+    from harness import auth, programs
+    auth._sessions.clear()
+    auth._attempts.clear()
+    programs._imports.clear()
+    return tmp_path
+
+
+@pytest.fixture
+def no_shell(monkeypatch):
+    """Never invoke git or systemctl in tests."""
+    from harness import programs
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw))
+        return 0, ""
+
+    monkeypatch.setattr(programs, "_run", fake_run)
+    return calls
+
+
+@pytest.fixture
+def client(no_shell, monkeypatch):
+    """A TestClient with the import worker stubbed out, so POSTing a program
+    registers it without cloning anything."""
+    from fastapi.testclient import TestClient
+    from harness import programs
+    from harness.main import app
+    monkeypatch.setattr(programs, "import_worker", lambda *a, **k: None)
+    return TestClient(app)
+
+
+@pytest.fixture
+def authed(client):
+    r = client.post("/api/setup", json={"username": "admin", "password": "testpassword"})
+    assert r.status_code == 200
+    return client

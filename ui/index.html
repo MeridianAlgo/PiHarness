@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0b">
+<meta name="mobile-web-app-capable" content="yes">
+<title>PiHarness</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Crect width='36' height='36' rx='10' fill='%2310b981'/%3E%3Cg stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M27 22v-8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 009 14v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0027 22z'/%3E%3Cpolyline points='9.3 13 18 18 26.7 13'/%3E%3Cline x1='18' y1='28' x2='18' y2='18'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="stylesheet" href="/assets/css/app.css">
+<script>(function(){var t=localStorage.getItem('ph-theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body>
+
+<!-- ── Sign in / first-run setup ── -->
+<div id="view-login" class="hidden">
+  <div class="login-card">
+    <div class="login-logo">
+      <svg width="34" height="34" viewBox="0 0 36 36" fill="none"><rect width="36" height="36" rx="10" fill="url(#lg1)"/><g stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"><path d="M27 22v-8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 009 14v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0027 22z"/><polyline points="9.3 13 18 18 26.7 13"/><line x1="18" y1="28" x2="18" y2="18"/></g><defs><linearGradient id="lg1" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse"><stop stop-color="#10b981"/><stop offset="1" stop-color="#0891b2"/></linearGradient></defs></svg>
+      <div><div class="login-logo-text">PiHarness</div><div class="login-sub" id="login-sub">Program harness</div></div>
+    </div>
+    <div class="field"><label>Username</label><input id="login-user" type="text" placeholder="admin" autocomplete="username" autocapitalize="off"></div>
+    <div class="field"><label>Password</label><input id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+    <button class="btn btn-primary btn-full" id="login-btn">Sign in</button>
+    <div id="login-error" class="form-error"></div>
+    <div id="setup-note" class="login-note hidden">No account yet — pick a username and a password of at least 8 characters. This is the only account.</div>
+  </div>
+</div>
+
+<!-- ── App ── -->
+<div id="view-app" class="hidden">
+  <header class="topbar">
+    <span class="topbar-logo">
+      <svg width="22" height="22" viewBox="0 0 36 36" fill="none"><rect width="36" height="36" rx="10" fill="url(#lg2)"/><g stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"><path d="M27 22v-8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 009 14v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0027 22z"/><polyline points="9.3 13 18 18 26.7 13"/><line x1="18" y1="28" x2="18" y2="18"/></g><defs><linearGradient id="lg2" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse"><stop stop-color="#10b981"/><stop offset="1" stop-color="#0891b2"/></linearGradient></defs></svg>
+      <span class="topbar-logo-text">PiHarness</span>
+    </span>
+    <span class="topbar-ver" id="topbar-ver"></span>
+    <div class="topbar-right">
+      <span class="topbar-monitor hidden" id="monitor-pill" title="A monitor is plugged into the Pi">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>Monitor
+      </span>
+      <button class="btn btn-ghost btn-sm" id="theme-btn" title="Light / dark">Theme</button>
+      <button class="btn btn-ghost btn-sm" id="pass-btn" title="Change password">Password</button>
+      <button class="btn btn-ghost btn-sm" id="logout-btn">Sign out</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="panel">
+      <div class="panel-title">Import from GitHub</div>
+      <p class="lead">Paste a repository and the harness clones it onto the Pi, installs its
+        dependencies, and keeps it running — through crashes and reboots.</p>
+      <div class="import-row">
+        <input id="prog-repo-input" type="text" placeholder="github.com/owner/repo   ·   or just   owner/repo" autocomplete="off" spellcheck="false">
+        <button class="btn btn-primary btn-sm" id="prog-import-btn">Import</button>
+      </div>
+      <details class="import-opts">
+        <summary>Options — name, start command, web port, private repos</summary>
+        <div class="field"><label>Name <span class="hint">(defaults to the repo name)</span></label><input id="prog-name-input" type="text" placeholder="my-app" autocapitalize="off" autocomplete="off"></div>
+        <div class="field"><label>Start command <span class="hint">(auto-detected from package.json / main.py if blank)</span></label><input id="prog-cmd-input" type="text" placeholder="python3 main.py" autocomplete="off" spellcheck="false"></div>
+        <div class="field"><label>Web port <span class="hint">(only if the program serves a web UI)</span></label><input id="prog-port-input" type="number" min="1024" max="65535" placeholder="3000" autocomplete="off"></div>
+        <div class="field"><label>Access token <span class="hint">(only for private repos — read access to that repo)</span></label><input id="prog-token-input" type="password" placeholder="github_pat_… or ghp_…" autocomplete="off" spellcheck="false"></div>
+        <div class="field"><label>Updates</label>
+          <select id="prog-ota-input">
+            <option value="github" selected>Check GitHub — badge + one-click update</option>
+            <option value="auto">Auto — pull and restart new commits unattended</option>
+            <option value="self">Self-managed — the program runs its own updater</option>
+          </select>
+        </div>
+      </details>
+      <div class="ai-row">
+        <span>New to this? Copy a prompt that tells any AI how to shape a repo into a harness-ready program, then import what it builds.</span>
+        <button class="btn btn-ghost btn-xs" id="prompt-btn" title="Copies a prompt that makes any repo harness-ready">Copy prompt</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Installed programs</div>
+      <div id="programs-list"><div class="loading"><span class="spinner"></span>Loading…</div></div>
+      <div class="foot-note">Every program must be a long-running process (a server or a loop, not a
+        one-shot script) so it can run continuously in the background. Full requirements and API:
+        <a href="https://github.com/MeridianAlgo/PiHarness/blob/main/docs/programs.md" target="_blank" rel="noopener">docs/programs.md</a></div>
+    </section>
+  </main>
+</div>
+
+<div id="toast-container"></div>
+
+<script src="/assets/js/app.js"></script>
+</body>
+</html>

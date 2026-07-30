@@ -1,0 +1,40 @@
+"""Paths and tunables. Each one has an environment override so a dev box can
+run out of a temp directory instead of /etc and /opt."""
+import os
+from pathlib import Path
+
+# State the harness keeps for itself: credentials, program registry, secrets.
+# Root-only in a real install.
+CONFIG_DIR = Path(os.environ.get("HARNESS_CONFIG_DIR", "/etc/piharness"))
+CREDENTIALS_FILE = CONFIG_DIR / "credentials.json"
+REGISTRY_FILE = CONFIG_DIR / "programs.json"
+# Per-program secrets, injected via the unit's EnvironmentFile. Kept outside
+# the clone so a program's own `git pull` can't expose them.
+ENV_DIR = CONFIG_DIR / "program-env"
+MONITOR_FILE = CONFIG_DIR / "monitor-program"
+KIOSK_SCRIPT = CONFIG_DIR / "kiosk-launch.sh"
+
+# Cloned program code.
+PROGRAMS_DIR = Path(os.environ.get("HARNESS_PROGRAMS_DIR", "/opt/piharness/programs"))
+UNIT_DIR = Path(os.environ.get("HARNESS_UNIT_DIR", "/etc/systemd/system"))
+
+# The port the harness listens on. Reserved, so a program can't claim it.
+PORT = int(os.environ.get("HARNESS_PORT", "8080"))
+
+SESSION_TTL_HOURS = int(os.environ.get("HARNESS_SESSION_TTL", "24"))
+# Set to 1 when serving HTTPS directly, with no reverse proxy in front, so the
+# session cookie gets the Secure flag.
+COOKIE_SECURE = os.environ.get("HARNESS_COOKIE_SECURE", "0") == "1"
+COOKIE_NAME = "harness_session"
+
+# Public origin for the /apps/<name>/ links, for when the Pi is behind a domain
+# or a tunnel. Left empty, Tailscale is autodetected instead.
+PUBLIC_URL = os.environ.get("HARNESS_PUBLIC_URL", "").rstrip("/")
+
+# How often the unattended updater checks GitHub for programs on ota="auto".
+AUTO_UPDATE_INTERVAL = int(os.environ.get("HARNESS_AUTO_UPDATE_INTERVAL", str(6 * 3600)))
+
+UI_DIR = Path(__file__).parent.parent / "ui"
+
+_raw_origins = os.environ.get("HARNESS_CORS_ORIGINS", "")
+CORS_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]

@@ -1,0 +1,27 @@
+[Unit]
+Description=PiHarness — program harness
+Documentation=https://github.com/MeridianAlgo/PiHarness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/piharness
+# --no-access-log: a formatted journald line per request is real CPU on a Pi
+# under load, and the app already logs what matters itself.
+ExecStart=/opt/piharness/venv/bin/uvicorn harness.main:app --host 0.0.0.0 --port 8080 --no-access-log --log-level warning
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=piharness
+
+# Root: the harness writes systemd units and runs systemctl for every program.
+User=root
+Group=root
+
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/piharness/env
+
+[Install]
+WantedBy=multi-user.target
