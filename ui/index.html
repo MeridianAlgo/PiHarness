@@ -121,17 +121,39 @@
 
     <section class="panel">
       <h2 class="panel-title">API tokens</h2>
-      <p class="lead">For scripts and other machines. A token carries the same rights as your
-        account, is shown once, and can be revoked on its own without signing your browser out.</p>
+      <p class="lead">For scripts, and for agents. A token is shown once, can be revoked on its
+        own without signing your browser out, and is scoped: read-only tokens cannot change
+        anything. No token can read a secret's value or mint another token.</p>
       <div id="token-list"></div>
       <div class="import-row" style="margin-top:12px">
         <div class="import-field">
           <label for="token-label-input" class="sr-only">Token name</label>
           <input id="token-label-input" type="text" placeholder="what is this for?" autocomplete="off" maxlength="60">
         </div>
+        <div class="import-field">
+          <label for="token-scope-input" class="sr-only">Scope</label>
+          <select id="token-scope-input">
+            <option value="full" selected>full — import, start, stop, edit, remove</option>
+            <option value="read">read — status and logs only</option>
+          </select>
+        </div>
         <button class="btn btn-sm" id="token-create-btn">Create token</button>
       </div>
       <div id="token-new"></div>
+
+      <details class="agent-setup" id="agent-setup">
+        <summary>Connect an agent — Claude Code, Codex, or plain HTTP</summary>
+        <p class="agent-step">The MCP server is one file with no dependencies. It runs on the
+          machine your agent runs on, not on the Pi.</p>
+        <pre id="mcp-curl"></pre>
+        <p class="agent-step">Claude Code</p>
+        <pre id="mcp-claude"></pre>
+        <p class="agent-step">Codex, in <code>~/.codex/config.toml</code></p>
+        <pre id="mcp-codex"></pre>
+        <p class="agent-step">Anything that can make an HTTP call can skip MCP and use the API
+          with the same token. The machine-readable summary is at <code id="mcp-agent-url"></code></p>
+        <button class="btn btn-xs" id="mcp-copy-btn">Copy setup</button>
+      </details>
     </section>
   </main>
 </div>

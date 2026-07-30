@@ -9,7 +9,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from harness import config, kiosk, metrics, programs, prompt, tunnel
-from harness.auth import require_auth, validate_session
+from harness.auth import require_auth, require_session, validate_session
 
 router = APIRouter(prefix="/api/programs", tags=["programs"])
 proxy = APIRouter(tags=["programs"])
@@ -225,17 +225,36 @@ def program_monitor(name: str, req: MonitorRequest, _: str = Depends(require_aut
 # KEY=VALUE lines stored at ENV_DIR/<name>.env (mode 0600, root-only) and handed
 # to the program as environment variables at start. GitHub repository secrets
 # never leave GitHub, so this is the on-Pi equivalent.
+#
+# Reading values back takes a signed-in session. A token can write secrets and
+# see which names exist, but never pull the values out, so a token that leaks
+# doesn't hand over every credential on the Pi with it.
 
 _ENV_LINE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 
 
-@router.get("/{name}/secrets")
-def get_secrets(name: str, _: str = Depends(require_auth)):
-    _prog(name)
+def _env_text(name: str) -> str:
     try:
-        return {"env": programs.env_file(name).read_text()}
+        return programs.env_file(name).read_text()
     except OSError:
-        return {"env": ""}
+        return ""
+
+
+@router.get("/{name}/secrets")
+def get_secrets(name: str, _: str = Depends(require_session)):
+    _prog(name)
+    return {"env": _env_text(name)}
+
+
+@router.get("/{name}/secret-names")
+def get_secret_names(name: str, _: str = Depends(require_auth)):
+    """The KEY names only, no values. Safe for a token, and enough for an agent
+    to tell whether the variable a program needs has been set."""
+    _prog(name)
+    names = [line.split("=", 1)[0].strip()
+             for line in _env_text(name).splitlines()
+             if line.strip() and not line.strip().startswith("#") and "=" in line]
+    return {"names": names}
 
 
 class SecretsRequest(BaseModel):
@@ -330,30 +349,70 @@ def tunnel_logs(lines: int = 80, _: str = Depends(require_auth)):
 # ── API tokens ────────────────────────────────────────────────────────────────
 
 @system.get("/tokens")
-def get_tokens(_: str = Depends(require_auth)):
+def get_tokens(_: str = Depends(require_session)):
     from harness import auth
     return {"tokens": auth.list_api_tokens()}
 
 
 class TokenRequest(BaseModel):
     label: str = "script"
+    scope: str = "full"   # one of auth.TOKEN_SCOPES
 
 
 @system.post("/tokens")
-def create_token(req: TokenRequest, user: str = Depends(require_auth)):
+def create_token(req: TokenRequest, user: str = Depends(require_session)):
     """Returns the token once. It is stored only as a hash, so it cannot be
     shown again — a lost token is revoked and replaced, not recovered."""
     from harness import auth
-    return {"token": auth.create_api_token(user, req.label.strip()),
-            "label": req.label.strip() or "unnamed"}
+    if req.scope not in auth.TOKEN_SCOPES:
+        raise HTTPException(400, f"scope must be one of {', '.join(auth.TOKEN_SCOPES)}")
+    return {"token": auth.create_api_token(user, req.label.strip(), req.scope),
+            "label": req.label.strip() or "unnamed",
+            "scope": req.scope}
 
 
 @system.delete("/tokens/{token_id}")
-def delete_token(token_id: str, _: str = Depends(require_auth)):
+def delete_token(token_id: str, _: str = Depends(require_session)):
     from harness import auth
     if not auth.revoke_api_token(token_id):
         raise HTTPException(404, "No such token")
     return {"status": "revoked"}
+
+
+# ── Agent access ──────────────────────────────────────────────────────────────
+
+@system.get("/agent")
+def agent_descriptor(request: Request):
+    """Unauthenticated on purpose, like /api/prompt: it says how to talk to this
+    harness and nothing about what is on it. Point an agent here and it can work
+    out the rest."""
+    from harness import __version__, auth
+    base = str(request.base_url).rstrip("/")
+    return {
+        "name": "piharness",
+        "version": __version__,
+        "description": "Runs programs from GitHub on a Raspberry Pi and keeps them running.",
+        "base_url": base,
+        "openapi": f"{base}/openapi.json",
+        "docs": f"{base}/docs",
+        "program_spec": f"{base}/api/prompt",
+        "authentication": {
+            "scheme": "bearer",
+            "header": "Authorization: Bearer <token>",
+            "token_prefix": auth.TOKEN_PREFIX,
+            "how_to_get_one": "Web UI, API tokens panel, or POST /api/tokens with a signed-in session.",
+            "scopes": {
+                "read": "GET only.",
+                "full": "Everything except reading secret values and managing tokens.",
+            },
+        },
+        "mcp": {
+            "transport": "stdio",
+            "server": f"{base}/agent/piharness_mcp.py",
+            "run": "python3 piharness_mcp.py",
+            "env": {"PIHARNESS_URL": base, "PIHARNESS_TOKEN": "<your token>"},
+        },
+    }
 
 
 # ── The AI spec ───────────────────────────────────────────────────────────────
@@ -438,7 +497,8 @@ async def apps_proxy(name: str, path: str, request: Request):
         from harness import auth as _auth
         token = request.cookies.get(config.COOKIE_NAME) \
             or request.headers.get("authorization", "").removeprefix("Bearer ")
-        if not (validate_session(token) or _auth.validate_api_token(token)):
+        if not (validate_session(token)
+                or _auth.validate_api_token(token, request.method)):
             raise HTTPException(401, "This program's link is private. Sign in first.")
     q = f"?{request.url.query}" if request.url.query else ""
     url = f"http://127.0.0.1:{prog['web_port']}/{path}{q}"

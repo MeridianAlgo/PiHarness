@@ -33,9 +33,20 @@ cookie-authenticated writes are checked against the request Origin for CSRF.
 | `/api/logout` | POST | session | Drop the current session |
 | `/api/me` | GET | yes | The signed-in username |
 | `/api/password` | POST | yes | `{current_password, new_password}`. Signs out everywhere |
-| `/api/tokens` | GET | yes | List token metadata. Never returns the tokens themselves |
-| `/api/tokens` | POST | yes | `{label}` → `{token}`, shown exactly once |
-| `/api/tokens/{id}` | DELETE | yes | Revoke one token |
+| `/api/tokens` | GET | session | List token metadata. Never returns the tokens themselves |
+| `/api/tokens` | POST | session | `{label, scope}` → `{token}`, shown exactly once |
+| `/api/tokens/{id}` | DELETE | session | Revoke one token |
+| `/api/agent` | GET | none | How to drive this harness: base URL, auth scheme, scopes, MCP server |
+
+### Token scopes
+
+`scope` is `full` (the default) or `read`. A `read` token may only use `GET`,
+`HEAD` and `OPTIONS`; anything else is refused with `403`.
+
+Three operations need a signed-in session and reject a token whatever its
+scope: managing tokens, changing the password, and reading secret *values*.
+Otherwise a token could widen its own scope or hand over every credential on
+the Pi. See [agents.md](agents.md).
 
 ## Limits
 
@@ -68,7 +79,8 @@ with 413. Proxied program traffic under `/apps/` is not rate limited.
 | `/api/programs/{name}` | DELETE | Stop and remove the program (the GitHub repo is untouched) |
 | `/api/programs/{name}/logs` | GET | Journal tail (`?lines=`, capped at 400) |
 | `/api/programs/{name}/monitor` | POST | `{on: true \| false}`, show on or clear the attached monitor |
-| `/api/programs/{name}/secrets` | GET / PUT | Read / replace the program's `KEY=VALUE` secrets |
+| `/api/programs/{name}/secrets` | GET (session) / PUT | Read or replace the program's `KEY=VALUE` secrets |
+| `/api/programs/{name}/secret-names` | GET | Secret names without their values. Usable with a token |
 | `/apps/{name}/…` | any | Reverse proxy to the program's web port |
 
 ### A program in a listing

@@ -24,3 +24,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash -n installer/install.sh && bash -n installer/update.sh
+
+  mcp-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      # The MCP server runs on the agent's machine with nothing installed, so
+      # it has to work on a bare interpreter.
+      - run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+            | python agent/piharness_mcp.py \
+            | python -c 'import json,sys; print(len(json.load(sys.stdin)["result"]["tools"]), "tools")'

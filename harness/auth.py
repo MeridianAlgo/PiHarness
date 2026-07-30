@@ -12,7 +12,7 @@ from typing import Optional
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import Cookie, Header, HTTPException
+from fastapi import Cookie, Depends, Header, HTTPException, Request
 
 from harness import config
 
@@ -149,6 +149,12 @@ def throttle_reset(ip: str) -> None:
 
 TOKEN_PREFIX = "phk_"
 
+# What a token is allowed to do. Agents made this worth having: a chatbot that
+# only needs to answer "why is this program failing" should not also be able to
+# delete it.
+TOKEN_SCOPES = ("read", "full")
+READ_METHODS = ("GET", "HEAD", "OPTIONS")
+
 
 def _token_file():
     return config.CONFIG_DIR / "api-tokens.json"
@@ -171,7 +177,7 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_api_token(username: str, label: str) -> str:
+def create_api_token(username: str, label: str, scope: str = "full") -> str:
     """Mint a token and return it in the clear. This is the only time it can be
     read; only its hash is stored."""
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
@@ -179,6 +185,7 @@ def create_api_token(username: str, label: str) -> str:
     data[_hash_token(token)] = {
         "label": label[:60] or "unnamed",
         "user": username,
+        "scope": scope if scope in TOKEN_SCOPES else "full",
         "created": time.time(),
         "last_used": None,
     }
@@ -189,8 +196,9 @@ def create_api_token(username: str, label: str) -> str:
 def list_api_tokens() -> list[dict]:
     """Metadata only. The tokens themselves are not recoverable."""
     return sorted(
-        ({"id": h[:12], "label": v.get("label"), "created": v.get("created"),
-          "last_used": v.get("last_used")} for h, v in _load_tokens().items()),
+        ({"id": h[:12], "label": v.get("label"), "scope": v.get("scope", "full"),
+          "created": v.get("created"), "last_used": v.get("last_used")}
+         for h, v in _load_tokens().items()),
         key=lambda t: t.get("created") or 0, reverse=True)
 
 
@@ -204,7 +212,9 @@ def revoke_api_token(token_id: str) -> bool:
     return False
 
 
-def validate_api_token(token: Optional[str]) -> Optional[str]:
+def api_token_record(token: Optional[str]) -> Optional[dict]:
+    """The stored record behind a token, or None. Same lookup as
+    validate_api_token, but the caller can see the scope."""
     if not token or not token.startswith(TOKEN_PREFIX):
         return None
     data = _load_tokens()
@@ -222,6 +232,17 @@ def validate_api_token(token: Optional[str]) -> Optional[str]:
     record["last_used"] = time.time()
     data[stored] = record
     _save_tokens(data)
+    return record
+
+
+def validate_api_token(token: Optional[str], method: Optional[str] = None) -> Optional[str]:
+    """The user behind a token, or None. Pass a request method to hold a
+    read-scoped token to reads."""
+    record = api_token_record(token)
+    if not record:
+        return None
+    if record.get("scope") == "read" and method and method not in READ_METHODS:
+        return None
     return record.get("user")
 
 
@@ -251,21 +272,35 @@ def rate_limit(ip: str, limit: int, window: int = 60) -> Optional[int]:
     return None
 
 
-# ── Dependency ────────────────────────────────────────────────────────────────
+# ── Dependencies ──────────────────────────────────────────────────────────────
 
 def require_auth(
+    request: Request,
     harness_session: Optional[str] = Cookie(default=None),
     authorization: Optional[str] = Header(default=None),
 ) -> str:
     """The signed-in username, or 401. Takes the browser's session cookie, or
-    `Authorization: Bearer phk_…` for scripts."""
+    `Authorization: Bearer phk_…` for scripts.
+
+    Records how the caller authenticated on request.state, so require_session
+    below can turn away a token holder without every route having to care."""
+    request.state.via_token = False
+    request.state.token_scope = None
+
     bearer = None
     if authorization and authorization.startswith("Bearer "):
         bearer = authorization[7:].strip()
     if bearer:
-        user = validate_api_token(bearer)
-        if user:
-            return user
+        record = api_token_record(bearer)
+        if record:
+            scope = record.get("scope", "full")
+            if scope == "read" and request.method not in READ_METHODS:
+                raise HTTPException(
+                    403, f"Token '{record.get('label')}' is read-only. Create a "
+                         f"token with scope 'full' to change anything.")
+            request.state.via_token = True
+            request.state.token_scope = scope
+            return record.get("user")
         # A session token presented as a bearer is no longer accepted: tokens
         # and sessions are separate credentials now. Say so, rather than 401ing
         # a script whose author has no way to guess why.
@@ -279,4 +314,15 @@ def require_auth(
     user = validate_session(harness_session)
     if not user:
         raise HTTPException(401, "Session expired or invalid")
+    return user
+
+
+def require_session(request: Request, user: str = Depends(require_auth)) -> str:
+    """Like require_auth, but a token is not enough. Guards the operations a
+    token must not reach: minting tokens, reading secret values, and changing
+    the password. Otherwise a token would be able to widen its own scope, or
+    quietly hand over every credential on the Pi."""
+    if getattr(request.state, "via_token", False):
+        raise HTTPException(
+            403, "This needs a signed-in session. An API token can't be used here.")
     return user

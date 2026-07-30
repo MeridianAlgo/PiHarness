@@ -243,7 +243,7 @@ class PasswordRequest(BaseModel):
 
 
 @app.post("/api/password")
-def change_password(req: PasswordRequest, user: str = Depends(auth.require_auth)):
+def change_password(req: PasswordRequest, user: str = Depends(auth.require_session)):
     if not auth.verify_password(user, req.current_password):
         raise HTTPException(401, "Current password is wrong.")
     if len(req.new_password) < 8:
@@ -254,6 +254,18 @@ def change_password(req: PasswordRequest, user: str = Depends(auth.require_auth)
 
 
 # ── Web UI ────────────────────────────────────────────────────────────────────
+
+@app.get("/agent/piharness_mcp.py", include_in_schema=False)
+def mcp_server_file():
+    """Serve the MCP server so it can be fetched straight from the Pi. It is
+    plain source with no secrets in it, so no auth is needed — and it runs on
+    the agent's machine, not here."""
+    path = config.AGENT_DIR / "piharness_mcp.py"
+    if not path.exists():
+        raise HTTPException(404, "MCP server file not installed")
+    return FileResponse(path, media_type="text/x-python",
+                        filename="piharness_mcp.py")
+
 
 _INDEX = config.UI_DIR / "index.html"
 

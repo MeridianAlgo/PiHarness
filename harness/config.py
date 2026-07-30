@@ -52,6 +52,9 @@ RATE_LIMIT_LOGIN = int(os.environ.get("HARNESS_RATE_LIMIT_LOGIN", "20"))
 MAX_BODY_BYTES = int(os.environ.get("HARNESS_MAX_BODY", str(1024 * 1024)))
 
 UI_DIR = Path(__file__).parent.parent / "ui"
+# The MCP server. Served over HTTP so an agent machine can fetch it
+# straight from the Pi rather than going via GitHub.
+AGENT_DIR = Path(__file__).parent.parent / "agent"
 
 _raw_origins = os.environ.get("HARNESS_CORS_ORIGINS", "")
 CORS_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]

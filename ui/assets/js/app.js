@@ -473,6 +473,7 @@ async function loadTokens() {
   $('token-list').innerHTML = tokens.length
     ? tokens.map(t => `<div class="token-row">
         <span class="token-label">${esc(t.label)}</span>
+        <span class="token-scope">${esc(t.scope || 'full')}</span>
         <span class="token-meta">${t.last_used ? 'used ' + fmtAgo(t.last_used) : 'never used'}</span>
         <button class="btn btn-ghost btn-xs btn-danger" data-act="revoke" data-name="${esc(t.id)}"
           data-arg="${esc(t.label)}">Revoke</button>
@@ -490,7 +491,8 @@ const fmtAgo = ts => {
 
 async function createToken() {
   const label = $('token-label-input').value.trim() || 'script';
-  const r = await api('/api/tokens', {method: 'POST', body: JSON.stringify({label})});
+  const scope = $('token-scope-input').value;
+  const r = await api('/api/tokens', {method: 'POST', body: JSON.stringify({label, scope})});
   if (!r?.ok) { toast('Could not create the token', 'error'); return; }
   const {token} = await r.json();
   $('token-label-input').value = '';
@@ -501,6 +503,51 @@ async function createToken() {
     <code>${esc(token)}</code>
   </div>`;
   loadTokens();
+  // Fill the setup snippets in with the real token and open them, so the next
+  // step after "here is your token" is visible rather than guessed at.
+  renderAgentSetup(token);
+  $('agent-setup').open = true;
+}
+
+// ── Agent setup ───────────────────────────────────────────────────────────────
+// Snippets carry this harness's own address, so they paste as-is. A token is
+// substituted only in the browser that just created it; it is never stored.
+
+function agentSnippets(token) {
+  const base = location.origin;
+  const t = token || '<your token>';
+  return {
+    curl: `curl -O ${base}/agent/piharness_mcp.py`,
+    claude: `claude mcp add piharness \\\n  --env PIHARNESS_URL=${base} \\\n  --env PIHARNESS_TOKEN=${t} \\\n  -- python3 "$PWD/piharness_mcp.py"`,
+    codex: `[mcp_servers.piharness]\ncommand = "python3"\nargs = ["/full/path/to/piharness_mcp.py"]\nenv = { PIHARNESS_URL = "${base}", PIHARNESS_TOKEN = "${t}" }`,
+    agent: `${base}/api/agent`,
+  };
+}
+
+function renderAgentSetup(token) {
+  if (!$('mcp-curl')) return;
+  const s = agentSnippets(token);
+  $('mcp-curl').textContent = s.curl;
+  $('mcp-claude').textContent = s.claude;
+  $('mcp-codex').textContent = s.codex;
+  $('mcp-agent-url').textContent = s.agent;
+}
+
+async function copyAgentSetup() {
+  // If a token was just minted it is still on screen; use it, so the copied
+  // block is ready to paste rather than needing a manual substitution.
+  const shown = document.querySelector('#token-new code');
+  const x = agentSnippets(shown ? shown.textContent : null);
+  const text = `# Download the MCP server\n${x.curl}\n\n# Claude Code\n${x.claude}\n\n# Codex, in ~/.codex/config.toml\n${x.codex}\n`;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } finally { ta.remove(); }
+  }
+  toast('Setup copied', 'success', 2500);
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -753,6 +800,9 @@ $('prog-import-btn').addEventListener('click', importProgram);
 $('prog-repo-input').addEventListener('keydown', e => { if (e.key === 'Enter') importProgram(); });
 $('prompt-btn').addEventListener('click', copyPrompt);
 $('token-create-btn').addEventListener('click', createToken);
+$('token-label-input').addEventListener('keydown', e => { if (e.key === 'Enter') createToken(); });
+$('mcp-copy-btn').addEventListener('click', copyAgentSetup);
+renderAgentSetup();
 $('token-label-input').addEventListener('keydown', e => { if (e.key === 'Enter') createToken(); });
 $('tunnel-named-btn').addEventListener('click', async () => {
   const token = $('tunnel-token-input').value.trim();

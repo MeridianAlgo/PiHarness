@@ -17,6 +17,9 @@ the Pi.
   Pi weirdness and are otherwise invisible.
 - **Drive it from a script.** Revocable API tokens, rate limiting, and a
   documented HTTP API.
+- **Hand it to an agent.** Scoped tokens plus a dependency-free MCP server, so
+  Claude Code, Codex or any chatbot can import a repo, restart something and
+  read the logs when it breaks. Read-only tokens can look without touching.
 
 ## Install
 
@@ -116,6 +119,8 @@ project, if you'd rather not restructure it yourself.
 
 - [docs/programs.md](docs/programs.md) — requirements, statuses, secrets,
   updates, the kiosk, and keeping a 24/7 program from cooking the Pi.
+- [docs/agents.md](docs/agents.md) — token scopes, the MCP server, wiring up
+  Claude Code and Codex, and what an agent can and can't reach.
 - [docs/api.md](docs/api.md) — the HTTP API, for scripting the harness.
 
 ## Layout
@@ -123,14 +128,15 @@ project, if you'd rather not restructure it yourself.
 ```
 harness/            the application
   config.py         paths and tunables, all env-overridable
-  auth.py           argon2 credentials, sessions, login throttle
+  auth.py           argon2 credentials, sessions, scoped tokens, throttles
   programs.py       registry, git, systemd units, imports, OTA
   kiosk.py          the monitor kiosk
   api.py            HTTP routes and the /apps/<name>/ proxy
   main.py           FastAPI app, sign-in, background updater
+agent/              MCP server, stdlib only, runs on the agent's machine
 ui/                 web UI, no build step
 installer/          install.sh, update.sh, piharness.service
-docs/               programs.md, api.md
+docs/               programs.md, agents.md, api.md
 tests/              pytest suite
 ```
 
@@ -162,7 +168,9 @@ Imported programs update on their own settings, separately from this.
 ## Trust
 
 An imported program runs on your Pi as root, with the same privileges as the
-harness. Only import repos you trust.
+harness. Only import repos you trust. The same goes for a `full` API token,
+since it can import: treat one as roughly equivalent to a shell, and hand out
+`read` tokens when the job is only diagnosis.
 
 ## License
 
