@@ -152,7 +152,13 @@ TOKEN_PREFIX = "phk_"
 # What a token is allowed to do. Agents made this worth having: a chatbot that
 # only needs to answer "why is this program failing" should not also be able to
 # delete it.
-TOKEN_SCOPES = ("read", "full")
+#
+# "program" is not one you can ask for. The harness mints one per program and
+# hands it to that program as HARNESS_TOKEN, so a program can save a secret it
+# rotated at runtime. It is bound to its own program and reaches exactly one
+# endpoint; see require_owner below.
+USER_SCOPES = ("read", "full")
+TOKEN_SCOPES = (*USER_SCOPES, "program")
 READ_METHODS = ("GET", "HEAD", "OPTIONS")
 
 
@@ -177,15 +183,19 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_api_token(username: str, label: str, scope: str = "full") -> str:
+def create_api_token(username: str, label: str, scope: str = "full",
+                     program: Optional[str] = None) -> str:
     """Mint a token and return it in the clear. This is the only time it can be
-    read; only its hash is stored."""
+    read; only its hash is stored.
+
+    `program` binds a scope="program" token to the one program it belongs to."""
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
     data = _load_tokens()
     data[_hash_token(token)] = {
         "label": label[:60] or "unnamed",
         "user": username,
         "scope": scope if scope in TOKEN_SCOPES else "full",
+        "program": program,
         "created": time.time(),
         "last_used": None,
     }
@@ -197,6 +207,7 @@ def list_api_tokens() -> list[dict]:
     """Metadata only. The tokens themselves are not recoverable."""
     return sorted(
         ({"id": h[:12], "label": v.get("label"), "scope": v.get("scope", "full"),
+          "program": v.get("program"),
           "created": v.get("created"), "last_used": v.get("last_used")}
          for h, v in _load_tokens().items()),
         key=lambda t: t.get("created") or 0, reverse=True)
@@ -210,6 +221,18 @@ def revoke_api_token(token_id: str) -> bool:
             _save_tokens(data)
             return True
     return False
+
+
+def revoke_program_tokens(name: str) -> None:
+    """Drop the token issued to a program. Called when it is removed, so a
+    deleted program's credential doesn't outlive it."""
+    data = _load_tokens()
+    doomed = [h for h, v in data.items() if v.get("program") == name]
+    if not doomed:
+        return
+    for h in doomed:
+        del data[h]
+    _save_tokens(data)
 
 
 def api_token_record(token: Optional[str]) -> Optional[dict]:
@@ -294,6 +317,13 @@ def require_auth(
         record = api_token_record(bearer)
         if record:
             scope = record.get("scope", "full")
+            if scope == "program":
+                # A program's own token. It reaches its own secrets and nothing
+                # else, so it never gets past this general-purpose dependency.
+                raise HTTPException(
+                    403, f"This is the token belonging to program "
+                         f"'{record.get('program')}'. It can only PATCH that "
+                         f"program's secrets.")
             if scope == "read" and request.method not in READ_METHODS:
                 raise HTTPException(
                     403, f"Token '{record.get('label')}' is read-only. Create a "
@@ -315,6 +345,35 @@ def require_auth(
     if not user:
         raise HTTPException(401, "Session expired or invalid")
     return user
+
+
+def require_owner(
+    name: str,
+    request: Request,
+    harness_session: Optional[str] = Cookie(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> str:
+    """A signed-in session, a full token, or the token belonging to `name`
+    itself.
+
+    This is what lets a program save a credential it rotated — a refreshed
+    OAuth token that would otherwise be lost on the next restart — without
+    handing it a key to every other program on the Pi. `name` comes from the
+    path, so the binding is checked against the program actually being written."""
+    bearer = None
+    if authorization and authorization.startswith("Bearer "):
+        bearer = authorization[7:].strip()
+    if bearer:
+        record = api_token_record(bearer)
+        if record and record.get("scope") == "program":
+            if record.get("program") != name:
+                raise HTTPException(
+                    403, f"This token belongs to program "
+                         f"'{record.get('program')}', not '{name}'.")
+            request.state.via_token = True
+            request.state.token_scope = "program"
+            return record.get("user")
+    return require_auth(request, harness_session, authorization)
 
 
 def require_session(request: Request, user: str = Depends(require_auth)) -> str:

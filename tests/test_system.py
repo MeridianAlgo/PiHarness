@@ -289,6 +289,64 @@ def test_program_stats_treats_systemd_unknowns_as_missing(monkeypatch):
     assert s["pid"] is None
 
 
+# ── Updating the harness itself ───────────────────────────────────────────────
+
+def test_update_check_reports_a_moved_origin(authed, monkeypatch):
+    answers = {
+        ("rev-parse", "HEAD"): (0, "a" * 40),
+        ("fetch", "origin", "main", "--quiet"): (0, ""),
+        ("rev-parse", "origin/main"): (0, "b" * 40),
+        ("show", "origin/main:VERSION"): (0, "2.1.0\n"),
+    }
+    monkeypatch.setattr(programs, "_run",
+                        lambda cmd, **kw: answers[tuple(cmd[3:])])
+    body = authed.get("/api/update").json()
+    assert body["update_available"] is True
+    assert body["local"] == "a" * 8 and body["remote"] == "b" * 8
+    assert body["remote_version"] == "2.1.0"
+    assert body["error"] is None
+
+
+def test_update_check_survives_no_network(authed, monkeypatch):
+    """The Pi being offline is normal. It reports why instead of 500ing."""
+    monkeypatch.setattr(programs, "_run", lambda cmd, **kw:
+                        (0, "c" * 40) if cmd[3] == "rev-parse" else (128, "could not resolve host"))
+    body = authed.get("/api/update").json()
+    assert body["update_available"] is False
+    assert "Cannot reach GitHub" in body["error"]
+
+
+def test_update_runs_detached_from_the_service_it_restarts(authed, monkeypatch, no_shell):
+    """update.sh ends in `systemctl restart piharness`. As a child of the
+    harness it would be killed with the service it was restarting, leaving the
+    install half-applied — so it has to go to systemd as its own unit."""
+    from harness import selfupdate
+
+    monkeypatch.setattr(selfupdate.shutil, "which", lambda _: "/usr/bin/systemd-run")
+    r = authed.post("/api/update")
+    assert r.status_code == 200
+    cmd = [c for c, _ in no_shell if c[0] == "systemd-run"][0]
+    assert cmd[:3] == ["systemd-run", "--unit", selfupdate.UNIT]
+    assert cmd[-2:] == [str(selfupdate.SCRIPT), "--auto"]
+
+
+def test_update_says_so_when_it_cannot_run(authed, monkeypatch):
+    from harness import selfupdate
+
+    monkeypatch.setattr(selfupdate.shutil, "which", lambda _: None)
+    r = authed.post("/api/update")
+    assert r.status_code == 409
+    assert "systemd-run" in r.json()["detail"]
+
+
+def test_a_read_token_can_check_but_not_apply(authed, monkeypatch):
+    monkeypatch.setattr(programs, "_run", lambda *a, **k: (0, "d" * 40))
+    token = authed.post("/api/tokens", json={"label": "bot", "scope": "read"}).json()["token"]
+    hdr = {"Authorization": f"Bearer {token}"}
+    assert authed.get("/api/update", headers=hdr).status_code == 200
+    assert authed.post("/api/update", headers=hdr).status_code == 403
+
+
 # ── The AI spec ───────────────────────────────────────────────────────────────
 
 def test_prompt_is_served_and_is_the_only_copy(client):

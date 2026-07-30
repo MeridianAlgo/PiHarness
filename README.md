@@ -63,12 +63,18 @@ so an imported program can never see the credentials of whoever is browsing it.
 Secrets are `KEY=VALUE` lines per program, stored `0600` at
 `/etc/piharness/program-env/<name>.env` and injected as environment variables at
 start. They aren't in the clone, so a `git pull` can't touch them, and the API
-never returns them.
+never returns them. A program can also write its own back — `HARNESS_TOKEN` in
+its environment lets it `PATCH` its own secrets and nothing else, so a refreshed
+OAuth token survives a restart instead of being re-negotiated every reboot.
 
 Updates are per program. The harness can check GitHub and flag new commits for a
 one-click update, apply them unattended every 6 hours, or stay out of the way
 entirely for programs that update themselves. Pulls are `--ff-only`, so local
 commits on the Pi don't get clobbered.
+
+The harness updates itself from GitHub the same way, on demand: *Harness
+updates* in the web UI, or `POST /api/update`. It pulls, reinstalls, and
+restarts; the programs it supervises keep running through it.
 
 For private repos, paste a GitHub access token at import time. It's kept in a
 root-only registry and handed to git as environment config, so it never reaches
@@ -157,13 +163,34 @@ The tests stub out git and systemctl, so they run anywhere. No Pi, no root.
 
 ## Updating the harness
 
+From the web UI, under **Harness updates**: it shows the version you're on
+against the latest on `main`, and one button applies it. Same thing from a
+script or an agent:
+
+```bash
+curl -sS      $HARNESS/api/update -H "Authorization: Bearer $TOKEN"   # what's waiting
+curl -sS -X POST $HARNESS/api/update -H "Authorization: Bearer $TOKEN"   # apply it
+```
+
+Applying pulls, reinstalls dependencies, re-renders the systemd unit keeping
+your port, and restarts the service, so the UI drops for about a minute. Your
+programs are separate units and keep running. The updater runs as its own
+transient unit rather than as a child of the harness — it has to, since it
+restarts the thing that started it — and its output survives at
+`GET /api/update/logs` or `journalctl -u piharness-update`.
+
+Over SSH, unchanged:
+
 ```bash
 sudo /opt/piharness/installer/update.sh          # asks first
 sudo /opt/piharness/installer/update.sh --auto   # unattended
 sudo /opt/piharness/installer/update.sh --check  # exit 1 if an update is waiting
 ```
 
-Imported programs update on their own settings, separately from this.
+There's no unattended mode for the harness itself, deliberately: a supervisor
+that auto-updates into a broken state takes the recovery UI down with it. Put
+`--auto` on a systemd timer if you want one anyway. Imported programs update on
+their own settings, separately from all of this.
 
 ## Trust
 

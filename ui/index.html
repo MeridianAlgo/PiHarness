@@ -120,6 +120,16 @@
     </section>
 
     <section class="panel">
+      <h2 class="panel-title">Harness updates</h2>
+      <p class="lead">The harness updates from its own GitHub repository, the same way the
+        programs it runs do. Checking asks GitHub; applying pulls, reinstalls dependencies and
+        restarts the service, so this page goes away for about a minute and comes back on the
+        new version.</p>
+      <div class="tunnel-state" id="selfupdate-state"><span class="tunnel-url">Checking…</span></div>
+      <div class="tunnel-actions" id="selfupdate-actions"></div>
+    </section>
+
+    <section class="panel">
       <h2 class="panel-title">API tokens</h2>
       <p class="lead">For scripts, and for agents. A token is shown once, can be revoked on its
         own without signing your browser out, and is scoped: read-only tokens cannot change

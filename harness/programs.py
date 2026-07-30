@@ -47,6 +47,8 @@ After=network-online.target
 Type=simple
 WorkingDirectory={workdir}
 {env_line}EnvironmentFile=-{env_file}
+# Last, so a key in the user's secrets file can't shadow HARNESS_TOKEN.
+EnvironmentFile=-{harness_env_file}
 ExecStart=/bin/bash -lc {cmd}
 Restart=always
 RestartSec=5
@@ -105,6 +107,37 @@ def env_file(name: str) -> Path:
     return config.ENV_DIR / f"{name}.env"
 
 
+def harness_env_file(name: str) -> Path:
+    """The harness's own variables for a program, kept apart from the user's
+    secrets file: the Secrets editor replaces that file wholesale, and would
+    otherwise wipe the program's credential every time someone saved."""
+    return config.ENV_DIR / f"{name}.harness.env"
+
+
+def ensure_program_token(name: str) -> None:
+    """Give a program the address of the harness and a token bound to itself,
+    so it can write back a secret it rotated at runtime.
+
+    This 0600 file is the only cleartext copy — the token store keeps a hash,
+    like every other token. Delete the file and the next unit write mints a new
+    one. Not put in the unit itself, which is world-readable in
+    /etc/systemd/system."""
+    from harness import auth
+    path = harness_env_file(name)
+    if path.exists():
+        return
+    auth.revoke_program_tokens(name)   # a stale hash with no cleartext left
+    token = auth.create_api_token("harness", f"program: {name}", "program", program=name)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"HARNESS_URL=http://127.0.0.1:{config.PORT}\n"
+                        f"HARNESS_PROGRAM={name}\n"
+                        f"HARNESS_TOKEN={token}\n")
+        os.chmod(path, 0o600)
+    except OSError:
+        auth.revoke_program_tokens(name)   # unwritable: don't leave a live token nobody holds
+
+
 # ── Git ───────────────────────────────────────────────────────────────────────
 
 def git_env(prog: dict) -> Optional[dict]:
@@ -147,10 +180,11 @@ def unit_text(name: str, prog: dict) -> str:
     env_line = f"Environment=PORT={prog['web_port']}\n" if prog.get("web_port") else ""
     return _UNIT_TEMPLATE.format(
         name=name, workdir=prog["dir"], env_line=env_line,
-        env_file=env_file(name), cmd=cmd)
+        env_file=env_file(name), harness_env_file=harness_env_file(name), cmd=cmd)
 
 
 def write_unit(name: str, prog: dict) -> None:
+    ensure_program_token(name)
     config.UNIT_DIR.mkdir(parents=True, exist_ok=True)
     (config.UNIT_DIR / f"{unit(name)}.service").write_text(unit_text(name, prog))
     _run(["systemctl", "daemon-reload"], timeout=15)
@@ -165,6 +199,7 @@ def refresh_units() -> None:
     for name, prog in load().items():
         if not prog.get("start_command"):
             continue
+        ensure_program_token(name)   # programs imported before tokens existed
         path = config.UNIT_DIR / f"{unit(name)}.service"
         try:
             new_text = unit_text(name, prog)
@@ -350,10 +385,13 @@ def remove(name: str, prog: dict) -> None:
         pass
     _run(["systemctl", "daemon-reload"], timeout=15)
     shutil.rmtree(prog["dir"], ignore_errors=True)
-    try:
-        env_file(name).unlink()   # secrets die with the program
-    except OSError:
-        pass
+    for path in (env_file(name), harness_env_file(name)):
+        try:
+            path.unlink()   # secrets die with the program
+        except OSError:
+            pass
+    from harness import auth
+    auth.revoke_program_tokens(name)
     with _lock:
         d = load()
         d.pop(name, None)

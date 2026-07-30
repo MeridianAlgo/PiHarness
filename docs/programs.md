@@ -56,6 +56,24 @@ dependencies it declares, writes a systemd unit with Restart=always, and runs it
    fast and loudly at startup if a required variable is missing, naming the
    variable.
 
+   If a credential CHANGES while the program runs — an OAuth access token you
+   refresh, a session key a service reissues, a device registration — write it
+   back, or it is lost on the next restart and you re-authenticate every time.
+   PiHarness gives every program three variables for exactly this:
+
+     HARNESS_URL      where the harness listens, e.g. http://127.0.0.1:8080
+     HARNESS_PROGRAM  this program's name in the harness
+     HARNESS_TOKEN    a token scoped to this program and nothing else
+
+   PATCH {HARNESS_URL}/api/programs/{HARNESS_PROGRAM}/secrets with
+   `Authorization: Bearer {HARNESS_TOKEN}` and a body of
+   {"env": {"KEY": "new value"}}. Only the keys you name change; a null value
+   deletes one. Do NOT pass {"restart": true} when saving your own credential —
+   you already hold the new value, and restarting yourself here is an infinite
+   loop. Treat the three variables as absent (skip the write-back, keep working)
+   rather than failing to start: they are missing when the program is run
+   outside PiHarness.
+
 5. IF IT SERVES A WEB UI
    Listen on 0.0.0.0 at the port in the PORT environment variable, falling back
    to a fixed default that you state in the README. The app is also reverse
@@ -261,6 +279,87 @@ comments are fine.
   `GET /api/programs`, deleted when the program is removed.
 - Saving restarts a running program so it picks up the new values.
 
+### A program writing its own secrets
+
+Reading is the easy half: the values arrive as environment variables and your
+code just reads them. The hard half is a credential that *changes while the
+program runs* — an OAuth access token you refresh every hour, a session key the
+service reissues, a device registration. Keep it in memory only and you lose it
+on the next restart, then re-authenticate from scratch every time the Pi
+reboots.
+
+So every program gets three variables of its own, on top of its secrets:
+
+| Variable | What it is |
+|---|---|
+| `HARNESS_URL` | Where the harness listens, e.g. `http://127.0.0.1:8080`. |
+| `HARNESS_PROGRAM` | The program's name in the harness. |
+| `HARNESS_TOKEN` | A token scoped to this one program. |
+
+`PATCH /api/programs/<name>/secrets` merges the keys you name into the file and
+leaves everything else — other keys, ordering, your comments — untouched:
+
+```python
+import os, json, urllib.request
+
+def save_secret(**values):
+    """Persist a rotated credential so it survives a restart. No-op when the
+    program isn't running under PiHarness."""
+    url, name = os.environ.get("HARNESS_URL"), os.environ.get("HARNESS_PROGRAM")
+    token = os.environ.get("HARNESS_TOKEN")
+    if not (url and name and token):
+        return False
+    req = urllib.request.Request(
+        f"{url}/api/programs/{name}/secrets",
+        data=json.dumps({"env": values}).encode(),
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"},
+        method="PATCH")
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return r.status == 200
+
+# after refreshing an OAuth token
+save_secret(ACCESS_TOKEN=new_access, REFRESH_TOKEN=new_refresh)
+```
+
+Node, same thing:
+
+```js
+async function saveSecret(values) {
+  const {HARNESS_URL, HARNESS_PROGRAM, HARNESS_TOKEN} = process.env;
+  if (!HARNESS_URL || !HARNESS_PROGRAM || !HARNESS_TOKEN) return false;
+  const r = await fetch(`${HARNESS_URL}/api/programs/${HARNESS_PROGRAM}/secrets`, {
+    method: 'PATCH',
+    headers: {Authorization: `Bearer ${HARNESS_TOKEN}`,
+              'Content-Type': 'application/json'},
+    body: JSON.stringify({env: values}),
+  });
+  return r.ok;
+}
+```
+
+Things worth knowing before you wire this up:
+
+- **Don't restart yourself.** The call takes an optional `"restart": true`,
+  which defaults to `false`, and a program saving its own credential must leave
+  it that way. You already hold the new value in memory; restarting to pick it
+  up drops you into a rotate-restart-rotate loop.
+- **It's a merge, not a replace.** `{"env": {"ACCESS_TOKEN": "…"}}` changes that
+  one key. `null` as a value deletes a key. This matters because a program can't
+  read its own values back, so it has nothing to build a full replacement from.
+- **The token only reaches this.** `HARNESS_TOKEN` is bound to its own program.
+  It can't list programs, read logs, start anything, or touch another program's
+  secrets — those all return 403. So a program that gets compromised can rewrite
+  its own credentials and nothing else on the Pi.
+- **It can't read values back**, only write. Nothing can read them except a
+  signed-in browser session; that's unchanged.
+- **Handle the variables being absent.** They're missing when someone runs your
+  repo on their laptop. Skip the write-back and carry on, don't refuse to start.
+- The variables live in `/etc/piharness/program-env/<name>.harness.env` (0600),
+  a separate file from your secrets, so saving in the Secrets editor can't
+  clobber them. Delete the file and the harness mints a fresh token on its next
+  restart.
+
 ## Updates
 
 Every program has one of three update modes. Pick one at import time (Options →
@@ -285,6 +384,48 @@ files and exit, and `Restart=always` brings it back on the new code.
 `--ff-only` means an update never force-resets your clone. If you've committed
 changes on the Pi that GitHub can't fast-forward over, the pull is skipped and
 logged and the program keeps running, rather than losing your work.
+
+### Updating the harness itself
+
+The harness is a git clone from GitHub too, and updates the same way: **Harness
+updates** in the web UI shows the version you're on against the latest on
+`main`, and **Update harness** applies it.
+
+Applying pulls, reinstalls the harness's own dependencies, re-renders the
+systemd unit (keeping whatever port you set) and restarts the service. The web
+UI stops answering for about a minute and comes back on the new version. Your
+programs are separate units and keep running throughout.
+
+Same thing from a script or an agent, with a `full`-scoped token:
+
+```bash
+curl -sS -H "Authorization: Bearer $TOKEN" http://piharness.local:8080/api/update
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" http://piharness.local:8080/api/update
+```
+
+Notes:
+
+- The updater runs as its own transient systemd unit, not as a child of the
+  harness. It has to: it restarts the harness, and a child would be killed
+  along with the service it was restarting, leaving the install half-applied.
+  That's also why the response comes back before the update has finished.
+- Read `GET /api/update/logs` (or **Update log** in the UI, or
+  `journalctl -u piharness-update`) afterwards to see what happened. It survives
+  the restart.
+- Rollback is printed in that log as a `git checkout <sha>` line for the commit
+  you were on.
+- There is no unattended mode for the harness, on purpose — an auto-updating
+  supervisor that breaks itself takes the recovery UI down with it. If you want
+  one anyway, `installer/update.sh --auto` is safe to put on a systemd timer or
+  in cron; `--check` exits 1 when an update is available.
+- Over SSH, unchanged: `sudo /opt/piharness/installer/update.sh`.
+- `HARNESS_BRANCH` picks a branch other than `main` for both the check and the
+  pull.
+
+A `full` token can apply a harness update. That's deliberate rather than an
+oversight: a token that can import a repository can already run arbitrary code
+on the Pi as root, so withholding self-update from it buys nothing and costs
+you the ability to update from an agent. `read` tokens can check but not apply.
 
 ## Resource use
 
@@ -371,6 +512,11 @@ because a blanket cap breaks the programs that legitimately need a whole core.
 - The registry is at `/etc/piharness/programs.json` (0600, since it can hold
   access tokens), code at `/opt/piharness/programs/`, secrets at
   `/etc/piharness/program-env/` (0600).
+- Each program's own harness token is in
+  `/etc/piharness/program-env/<name>.harness.env` (0600), not in its unit file,
+  which is world-readable. It is bound to that program: it can merge that
+  program's secrets and nothing else, and it is revoked when the program is
+  removed.
 - Access tokens reach git as in-memory environment config, so they never touch
   the clone's `.git/config`, the stored repo URL, process argv or an API
   response.

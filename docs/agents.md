@@ -46,6 +46,20 @@ Give an agent `read` when you want it to diagnose but not act, and `full` when
 you want it to fix things. Use a separate token per agent, so revoking one
 doesn't disturb the others, and the "used" column tells you which is which.
 
+A `full` token can also update the harness itself (`POST /api/update`). That is
+deliberate: the same token can import a repository, and importing one runs
+arbitrary code on the Pi as root, so refusing it self-update would cost you
+agent-driven updates and buy no security.
+
+There is a third scope you never ask for. The harness mints a `program` token
+per program and hands it to that program as `HARNESS_TOKEN`, so a program can
+save a credential it rotated at runtime. It reaches
+`PATCH /api/programs/<its own name>/secrets` and nothing else — not another
+program's secrets, not the program list, not its own values back. You'll see
+these in the token list, marked with the program they belong to; they're
+revoked when the program is removed. See
+[programs.md](programs.md#a-program-writing-its-own-secrets).
+
 ## MCP
 
 `agent/piharness_mcp.py` is an MCP server that runs **on your machine**, not on
@@ -111,7 +125,10 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
 | `remove_program` | Stop and delete. Requires `confirm=true` |
 | `program_logs` | Journal tail. The first place to look when something fails |
 | `list_secret_names` | Secret names, never values |
-| `set_secrets` | Replace a program's secrets |
+| `set_secrets` | Replace a program's secrets wholesale |
+| `patch_secrets` | Change named secrets and leave the rest alone. Prefer this — values can't be read back, so a full replace means guessing at what was there |
+| `update_harness` | Check for, or apply, an update to PiHarness itself |
+| `harness_update_logs` | What the last self-update did. Survives the restart it caused |
 | `show_on_monitor` | Put a program fullscreen on the Pi's screen, or clear it |
 
 `remove_program` refuses without `confirm=true`, and says what it would delete.

@@ -48,6 +48,13 @@ scope: managing tokens, changing the password, and reading secret *values*.
 Otherwise a token could widen its own scope or hand over every credential on
 the Pi. See [agents.md](agents.md).
 
+There is a third scope, `program`, which you can't ask for. The harness mints
+one per program and hands it to that program as `HARNESS_TOKEN`, so a program
+can save a credential it rotated at runtime. It reaches exactly one endpoint —
+`PATCH /api/programs/<its own name>/secrets` — and returns `403` everywhere
+else, including on another program's secrets. See
+[programs.md](programs.md#a-program-writing-its-own-secrets).
+
 ## Limits
 
 Requests to `/api` are rate limited per client address: 240/min in general,
@@ -64,6 +71,9 @@ with 413. Proxied program traffic under `/apps/` is not rate limited.
 | `/api/tunnel` | POST | yes | Start: `{mode: "quick" \| "named", token?, hostname?}` |
 | `/api/tunnel` | DELETE | yes | Stop the tunnel and delete its stored token |
 | `/api/tunnel/logs` | GET | yes | Journal tail for the tunnel (`?lines=`) |
+| `/api/update` | GET | yes | Harness version and commit vs GitHub: `{version, local, remote, remote_version, branch, update_available, error}` |
+| `/api/update` | POST | yes (`full`) | Pull, reinstall, restart the harness. Returns as soon as the updater has *started* |
+| `/api/update/logs` | GET | yes | Journal tail for the last harness update. Survives the restart |
 | `/api/prompt` | GET | none | The spec for making a repo importable (see [programs.md](programs.md)) |
 
 ## Programs
@@ -80,6 +90,7 @@ with 413. Proxied program traffic under `/apps/` is not rate limited.
 | `/api/programs/{name}/logs` | GET | Journal tail (`?lines=`, capped at 400) |
 | `/api/programs/{name}/monitor` | POST | `{on: true \| false}`, show on or clear the attached monitor |
 | `/api/programs/{name}/secrets` | GET (session) / PUT | Read or replace the program's `KEY=VALUE` secrets |
+| `/api/programs/{name}/secrets` | PATCH | Merge named keys: `{env: {KEY: value \| null}, restart?}`. Also accepts the program's own `HARNESS_TOKEN` |
 | `/api/programs/{name}/secret-names` | GET | Secret names without their values. Usable with a token |
 | `/apps/{name}/…` | any | Reverse proxy to the program's web port |
 
@@ -141,6 +152,28 @@ curl -sS -X PUT $HARNESS/api/programs/dashboard/secrets -H "Authorization: Beare
   -d '{"env":"API_KEY=abc123\nREGION=eu-west-1\n"}'
 ```
 
+Change one key and leave the rest alone. `null` deletes a key, and `restart`
+defaults to `false`:
+
+```bash
+curl -sS -X PATCH $HARNESS/api/programs/dashboard/secrets -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"env":{"API_KEY":"newvalue","OLD_KEY":null},"restart":true}'
+```
+
+A program does this to itself with the `HARNESS_TOKEN` in its own environment,
+which is how a rotated OAuth token survives a restart —
+[the pattern is in programs.md](programs.md#a-program-writing-its-own-secrets).
+
+Update the harness itself:
+
+```bash
+curl -sS $HARNESS/api/update -H "Authorization: Bearer $TOKEN"
+curl -sS -X POST $HARNESS/api/update -H "Authorization: Bearer $TOKEN"
+# ...then, once it is back up
+curl -sS $HARNESS/api/update/logs -H "Authorization: Bearer $TOKEN"
+```
+
 ## Errors
 
 Failures come back as `{"detail": "…"}`. `400` is a malformed request, `401`
@@ -170,5 +203,6 @@ Environment variables, read at startup (put them in `/etc/piharness/env`):
 | `HARNESS_PUBLIC_URL` | *(empty)* | Public origin for `/apps/<name>/` links. Falls back to Tailscale autodetection |
 | `HARNESS_SESSION_TTL` | `24` | Session lifetime, in hours |
 | `HARNESS_COOKIE_SECURE` | `0` | Set to `1` when serving HTTPS directly, so the cookie gets `Secure` |
-| `HARNESS_AUTO_UPDATE_INTERVAL` | `21600` | Seconds between unattended update checks |
+| `HARNESS_AUTO_UPDATE_INTERVAL` | `21600` | Seconds between unattended update checks for programs on `ota: "auto"` |
+| `HARNESS_BRANCH` | `main` | Branch the harness checks and pulls when updating itself |
 | `HARNESS_CORS_ORIGINS` | *(empty)* | Comma-separated extra origins allowed to call the API with cookies |

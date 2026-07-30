@@ -112,6 +112,95 @@ def test_secrets_die_with_the_program(authed):
     assert not programs.env_file("app").exists()
 
 
+# ── A program writing its own secrets ─────────────────────────────────────────
+
+def _with_token(authed, name="app"):
+    """A settled program that has been given its unit, and so its own token."""
+    authed.post("/api/programs", json={"repo_url": f"o/{name}"})
+    _settle(name, start_command="python3 main.py")
+    with programs._lock:
+        prog = programs.load()[name]
+    programs.write_unit(name, prog)
+    env = dict(line.split("=", 1)
+               for line in programs.harness_env_file(name).read_text().splitlines())
+    return env["HARNESS_TOKEN"]
+
+
+def test_program_gets_its_own_token_out_of_the_world_readable_unit(authed):
+    token = _with_token(authed)
+    path = programs.harness_env_file("app")
+    unit = (config.UNIT_DIR / "harness-prog-app.service").read_text()
+    # Units live world-readable in /etc/systemd/system, so the token goes in a
+    # 0600 file the unit merely points at (mode covered by test_secrets_roundtrip).
+    assert token not in unit
+    assert str(path) in unit
+    assert f"HARNESS_URL=http://127.0.0.1:{config.PORT}" in path.read_text()
+
+
+def test_patch_merges_and_leaves_everything_else_alone(authed):
+    token = _with_token(authed)
+    authed.put("/api/programs/app/secrets",
+               json={"env": "# creds\nACCESS=old\nREFRESH=keepme\nREGION=eu"})
+
+    r = authed.patch("/api/programs/app/secrets",
+                     json={"env": {"ACCESS": "new", "REGION": None, "EXTRA": "1"}},
+                     headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+
+    text = programs.env_file("app").read_text()
+    assert "ACCESS=new" in text
+    assert "REFRESH=keepme" in text      # untouched
+    assert "# creds" in text             # comments survive
+    assert "REGION" not in text          # null deletes
+    assert "EXTRA=1" in text             # new key appended
+
+
+def test_a_program_token_reaches_nothing_but_its_own_secrets(authed):
+    token = _with_token(authed, "app")
+    authed.post("/api/programs", json={"repo_url": "o/other"})
+    _settle("other")
+    hdr = {"Authorization": f"Bearer {token}"}
+
+    # Another program's secrets: bound to 'app', so no.
+    assert authed.patch("/api/programs/other/secrets",
+                        json={"env": {"K": "v"}}, headers=hdr).status_code == 403
+    # And nothing else on the API at all.
+    assert authed.get("/api/programs", headers=hdr).status_code == 403
+    assert authed.delete("/api/programs/other", headers=hdr).status_code == 403
+    assert authed.get("/api/programs/app/secret-names", headers=hdr).status_code == 403
+    # Least of all reading values back.
+    assert authed.get("/api/programs/app/secrets", headers=hdr).status_code == 403
+
+
+def test_patch_rejects_a_value_that_would_write_extra_lines(authed):
+    _with_token(authed)
+    r = authed.patch("/api/programs/app/secrets",
+                     json={"env": {"K": "v\nSMUGGLED=yes"}})
+    assert r.status_code == 400
+    r = authed.patch("/api/programs/app/secrets", json={"env": {"2BAD": "v"}})
+    assert r.status_code == 400
+
+
+def test_patch_does_not_restart_by_default(authed, monkeypatch, no_shell):
+    """A program saving its own rotated credential must not bounce itself, or it
+    loops: restart, rotate, save, restart."""
+    _with_token(authed)
+    monkeypatch.setattr(programs, "unit_state", lambda name: "active")
+    authed.patch("/api/programs/app/secrets", json={"env": {"K": "v"}})
+    assert not [c for c, _ in no_shell if c[:2] == ["systemctl", "restart"]]
+
+    authed.patch("/api/programs/app/secrets", json={"env": {"K": "v"}, "restart": True})
+    assert [c for c, _ in no_shell if c[:2] == ["systemctl", "restart"]]
+
+
+def test_a_removed_program_token_stops_working(authed):
+    from harness import auth
+    token = _with_token(authed)
+    authed.delete("/api/programs/app")
+    assert not programs.harness_env_file("app").exists()
+    assert auth.api_token_record(token) is None
+
+
 def test_ota_modes_and_update_check(authed, monkeypatch):
     authed.post("/api/programs", json={"repo_url": "o/checked"})
     authed.post("/api/programs", json={"repo_url": "o/selfmanaged", "ota": "self"})

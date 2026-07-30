@@ -62,6 +62,7 @@ function showApp(username) {
   loadMetrics();
   loadTunnel();
   loadTokens();
+  loadSelfUpdate();
   // The dashboard is the one thing that has to stay live. Polling matches the
   // server's sample interval, so it never asks for a point that doesn't exist.
   clearInterval(metricsTimer);
@@ -464,6 +465,33 @@ async function loadTunnel() {
     : `<button class="btn btn-primary btn-sm" data-act="tunnelquick">Get a public address</button>`;
 }
 
+// ── Harness updates ───────────────────────────────────────────────────────────
+
+async function loadSelfUpdate() {
+  const state = $('selfupdate-state'), actions = $('selfupdate-actions');
+  const r = await api('/api/update');
+  if (!r?.ok) { state.innerHTML = '<span class="tunnel-url">Could not check for updates.</span>'; return; }
+  const u = await r.json();
+  const version = `<span class="tunnel-url">v${esc(u.version)}${u.local ? ' · ' + esc(u.local) : ''}</span>`;
+
+  if (u.error) {
+    state.innerHTML = `<span class="prog-badge wait">can't check</span>${version}
+      <span class="tunnel-url">${esc(u.error)}</span>`;
+    actions.innerHTML = '';
+    return;
+  }
+  if (!u.update_available) {
+    state.innerHTML = `<span class="prog-badge run">up to date</span>${version}`;
+    actions.innerHTML = `<button class="btn btn-ghost btn-sm" data-act="selfcheck">Check again</button>`;
+    return;
+  }
+  state.innerHTML = `<span class="prog-badge wait">update available</span>
+    <span class="tunnel-url">v${esc(u.version)} → v${esc(u.remote_version || '?')}
+    · ${esc(u.local)} → ${esc(u.remote)} on ${esc(u.branch)}</span>`;
+  actions.innerHTML = `<button class="btn btn-primary btn-sm" data-act="selfupdate">Update harness</button>
+    <button class="btn btn-ghost btn-sm" data-act="selflogs">Update log</button>`;
+}
+
 // ── API tokens ────────────────────────────────────────────────────────────────
 
 async function loadTokens() {
@@ -475,8 +503,12 @@ async function loadTokens() {
         <span class="token-label">${esc(t.label)}</span>
         <span class="token-scope">${esc(t.scope || 'full')}</span>
         <span class="token-meta">${t.last_used ? 'used ' + fmtAgo(t.last_used) : 'never used'}</span>
-        <button class="btn btn-ghost btn-xs btn-danger" data-act="revoke" data-name="${esc(t.id)}"
-          data-arg="${esc(t.label)}">Revoke</button>
+        ${t.scope === 'program'
+          // Issued by the harness, not by you. It dies with its program, and
+          // revoking it here would leave that program holding a dead token.
+          ? '<span class="token-meta">removed with the program</span>'
+          : `<button class="btn btn-ghost btn-xs btn-danger" data-act="revoke" data-name="${esc(t.id)}"
+          data-arg="${esc(t.label)}">Revoke</button>`}
       </div>`).join('')
     : '<div class="prog-empty"><b>No tokens</b><div>Create one to drive the harness from a script.</div></div>';
 }
@@ -731,6 +763,39 @@ const HANDLERS = {
     pre.style.marginLeft = '0';
     pre.textContent = (await r.json()).logs;
     box.after(pre);
+    pre.scrollTop = pre.scrollHeight;
+  },
+
+  async selfcheck() {
+    $('selfupdate-state').innerHTML = '<span class="tunnel-url">Checking GitHub…</span>';
+    loadSelfUpdate();
+  },
+
+  async selfupdate() {
+    if (!confirm('Update the harness now? It pulls the latest code and restarts, '
+               + 'so this page stops responding for about a minute. '
+               + 'Running programs keep running.')) return;
+    const r = await api('/api/update', {method: 'POST'});
+    if (!r) return;
+    if (!r.ok) { toast(await detail(r, 'Could not start the update'), 'error', 8000); return; }
+    toast((await r.json()).detail, 'info', 15000);
+    $('selfupdate-state').innerHTML =
+      '<span class="prog-badge wait">updating</span>'
+      + '<span class="tunnel-url">Reload the page in a minute.</span>';
+    $('selfupdate-actions').innerHTML = '';
+  },
+
+  async selflogs() {
+    const r = await api('/api/update/logs');
+    if (!r?.ok) { toast('No update log', 'error'); return; }
+    const existing = document.getElementById('selfupdate-log-box');
+    if (existing) { existing.remove(); return; }
+    const pre = document.createElement('pre');
+    pre.id = 'selfupdate-log-box';
+    pre.className = 'prog-logs';
+    pre.style.marginLeft = '0';
+    pre.textContent = (await r.json()).logs;
+    $('selfupdate-state').after(pre);
     pre.scrollTop = pre.scrollHeight;
   },
 

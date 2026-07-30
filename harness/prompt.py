@@ -44,6 +44,24 @@ dependencies it declares, writes a systemd unit with Restart=always, and runs it
    fast and loudly at startup if a required variable is missing, naming the
    variable.
 
+   If a credential CHANGES while the program runs — an OAuth access token you
+   refresh, a session key a service reissues, a device registration — write it
+   back, or it is lost on the next restart and you re-authenticate every time.
+   PiHarness gives every program three variables for exactly this:
+
+     HARNESS_URL      where the harness listens, e.g. http://127.0.0.1:8080
+     HARNESS_PROGRAM  this program's name in the harness
+     HARNESS_TOKEN    a token scoped to this program and nothing else
+
+   PATCH {HARNESS_URL}/api/programs/{HARNESS_PROGRAM}/secrets with
+   `Authorization: Bearer {HARNESS_TOKEN}` and a body of
+   {"env": {"KEY": "new value"}}. Only the keys you name change; a null value
+   deletes one. Do NOT pass {"restart": true} when saving your own credential —
+   you already hold the new value, and restarting yourself here is an infinite
+   loop. Treat the three variables as absent (skip the write-back, keep working)
+   rather than failing to start: they are missing when the program is run
+   outside PiHarness.
+
 5. IF IT SERVES A WEB UI
    Listen on 0.0.0.0 at the port in the PORT environment variable, falling back
    to a fixed default that you state in the README. The app is also reverse

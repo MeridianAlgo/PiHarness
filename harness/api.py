@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from harness import config, kiosk, metrics, programs, prompt, tunnel
-from harness.auth import require_auth, require_session, validate_session
+from harness import config, kiosk, metrics, programs, prompt, selfupdate, tunnel
+from harness.auth import require_auth, require_owner, require_session, validate_session
 
 router = APIRouter(prefix="/api/programs", tags=["programs"])
 proxy = APIRouter(tags=["programs"])
@@ -229,8 +229,13 @@ def program_monitor(name: str, req: MonitorRequest, _: str = Depends(require_aut
 # Reading values back takes a signed-in session. A token can write secrets and
 # see which names exist, but never pull the values out, so a token that leaks
 # doesn't hand over every credential on the Pi with it.
+#
+# PUT replaces the whole file and is what the Secrets editor uses. PATCH merges
+# named keys and is what a *program* uses on itself, with the token the harness
+# handed it as HARNESS_TOKEN.
 
 _ENV_LINE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _env_text(name: str) -> str:
@@ -261,20 +266,12 @@ class SecretsRequest(BaseModel):
     env: str   # KEY=VALUE per line; blank lines and #comments allowed
 
 
-@router.put("/{name}/secrets")
-def put_secrets(name: str, req: SecretsRequest, _: str = Depends(require_auth)):
-    prog = _prog(name)
-    if len(req.env) > 32_000:
-        raise HTTPException(413, "Secrets too large (32 KB max)")
-    for i, line in enumerate(req.env.splitlines(), 1):
-        line = line.strip()
-        if line and not line.startswith("#") and not _ENV_LINE_RE.fullmatch(line):
-            raise HTTPException(400, f"Line {i} isn't KEY=VALUE (keys: letters, digits, underscore).")
+def _write_env(name: str, prog: dict, text: str, restart: bool) -> dict:
     path = programs.env_file(name)
-    if req.env.strip():
+    if text.strip():
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(req.env if req.env.endswith("\n") else req.env + "\n")
+            path.write_text(text if text.endswith("\n") else text + "\n")
             os.chmod(path, 0o600)
         except OSError as exc:
             raise HTTPException(500, f"Could not save secrets: {exc}")
@@ -284,10 +281,84 @@ def put_secrets(name: str, req: SecretsRequest, _: str = Depends(require_auth)):
         except FileNotFoundError:
             pass
     # A running program only sees new env on restart.
-    if prog.get("start_command") and programs.unit_state(name) == "active":
+    if restart and prog.get("start_command") and programs.unit_state(name) == "active":
         programs._run(["systemctl", "restart", programs.unit(name)], timeout=30)
         return {"status": "saved", "restarted": True}
     return {"status": "saved", "restarted": False}
+
+
+@router.put("/{name}/secrets")
+def put_secrets(name: str, req: SecretsRequest, _: str = Depends(require_auth)):
+    """Replace the whole file. What the Secrets editor sends."""
+    prog = _prog(name)
+    if len(req.env) > 32_000:
+        raise HTTPException(413, "Secrets too large (32 KB max)")
+    for i, line in enumerate(req.env.splitlines(), 1):
+        line = line.strip()
+        if line and not line.startswith("#") and not _ENV_LINE_RE.fullmatch(line):
+            raise HTTPException(400, f"Line {i} isn't KEY=VALUE (keys: letters, digits, underscore).")
+    return _write_env(name, prog, req.env, restart=True)
+
+
+class SecretPatch(BaseModel):
+    env: dict[str, Optional[str]]   # KEY -> new value; null deletes the key
+    restart: bool = False
+
+
+def _merge_env(text: str, updates: dict) -> str:
+    """Apply KEY -> value changes to KEY=VALUE text, leaving every other line —
+    comments, blanks, ordering — exactly as it was. A null value drops the key.
+
+    Merge rather than replace because the caller may be a program, and a program
+    can't read its own values back to build a full file to PUT."""
+    seen = set()
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        key = (stripped.split("=", 1)[0].strip()
+               if "=" in stripped and not stripped.startswith("#") else None)
+        if key is not None and key in updates:
+            seen.add(key)
+            if updates[key] is not None:
+                out.append(f"{key}={updates[key]}")
+            continue
+        out.append(line)
+    for key, value in updates.items():
+        if key not in seen and value is not None:
+            out.append(f"{key}={value}")
+    return "\n".join(out).strip("\n")
+
+
+@router.patch("/{name}/secrets")
+def patch_secrets(name: str, req: SecretPatch, _: str = Depends(require_owner)):
+    """Merge keys into a program's secrets, leaving the rest alone.
+
+    This is the endpoint a program calls on itself to persist something it
+    rotated at runtime — a refreshed OAuth token, a new device registration —
+    that would otherwise be lost on the next restart. Authenticate with the
+    HARNESS_TOKEN the harness put in its environment.
+
+    restart defaults to false on purpose: a program saving its own credential
+    already holds the new value in memory, and restarting it here would drop it
+    into a rotate-restart-rotate loop."""
+    prog = _prog(name)
+    if not req.env:
+        raise HTTPException(400, "Nothing to change: env is empty.")
+    if len(req.env) > 200:
+        raise HTTPException(413, "Too many keys in one call (200 max).")
+    for key, value in req.env.items():
+        if not _ENV_KEY_RE.fullmatch(key):
+            raise HTTPException(400, f"'{key}' isn't a valid variable name "
+                                     f"(letters, digits, underscore; not starting with a digit).")
+        # A newline in a value would write extra lines into the file, letting a
+        # caller set variables it never named.
+        if value is not None and ("\n" in value or "\r" in value):
+            raise HTTPException(400, f"The value for '{key}' contains a line break.")
+    merged = _merge_env(_env_text(name), req.env)
+    if len(merged) > 32_000:
+        raise HTTPException(413, "Secrets too large (32 KB max)")
+    result = _write_env(name, prog, merged, restart=req.restart)
+    return {**result, "keys": sorted(req.env)}
 
 
 # ── Dashboard metrics ─────────────────────────────────────────────────────────
@@ -313,6 +384,34 @@ def get_metrics(_: str = Depends(require_auth)):
         "interval": config.METRICS_INTERVAL,
         "programs": per_program,
     }
+
+
+# ── Updating the harness itself ───────────────────────────────────────────────
+# The programs get OTA from GitHub; so does the thing running them. A full token
+# is enough to apply one, deliberately: a token that can import a repository can
+# already run arbitrary code on this Pi as root, so withholding self-update from
+# it would buy nothing and cost you the ability to update from an agent.
+
+@system.get("/update")
+def check_harness_update(_: str = Depends(require_auth)):
+    """Compare this install with GitHub. Fetches, so it isn't free — the UI
+    calls it when you open the panel, not on a poll."""
+    return selfupdate.check()
+
+
+@system.post("/update")
+def apply_harness_update(_: str = Depends(require_auth)):
+    try:
+        return selfupdate.apply()
+    except selfupdate.SelfUpdateError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@system.get("/update/logs")
+def harness_update_logs(lines: int = 80, _: str = Depends(require_auth)):
+    """The updater outlives the restart it triggers, so this is how you find out
+    what happened after the harness comes back."""
+    return {"logs": selfupdate.logs(lines)}
 
 
 # ── Cloudflare tunnel ─────────────────────────────────────────────────────────
@@ -364,8 +463,10 @@ def create_token(req: TokenRequest, user: str = Depends(require_session)):
     """Returns the token once. It is stored only as a hash, so it cannot be
     shown again — a lost token is revoked and replaced, not recovered."""
     from harness import auth
-    if req.scope not in auth.TOKEN_SCOPES:
-        raise HTTPException(400, f"scope must be one of {', '.join(auth.TOKEN_SCOPES)}")
+    # Not TOKEN_SCOPES: "program" tokens are minted by the harness and bound to
+    # a program, so there is no sensible one to hand out here.
+    if req.scope not in auth.USER_SCOPES:
+        raise HTTPException(400, f"scope must be one of {', '.join(auth.USER_SCOPES)}")
     return {"token": auth.create_api_token(user, req.label.strip(), req.scope),
             "label": req.label.strip() or "unnamed",
             "scope": req.scope}
@@ -404,6 +505,9 @@ def agent_descriptor(request: Request):
             "scopes": {
                 "read": "GET only.",
                 "full": "Everything except reading secret values and managing tokens.",
+                "program": "Issued by the harness to a program it runs, handed "
+                           "over as HARNESS_TOKEN. PATCH /api/programs/<its own "
+                           "name>/secrets and nothing else.",
             },
         },
         "mcp": {

@@ -174,6 +174,28 @@ def t_set_secrets(name, env):
     return result
 
 
+def t_patch_secrets(name, env, restart=False):
+    result = call_api("PATCH", f"/api/programs/{urllib.parse.quote(name)}/secrets",
+                      {"env": env, "restart": restart})
+    result["note"] = "Only the named keys changed. Everything else was left alone."
+    return result
+
+
+def t_update_harness(check_only=True):
+    if check_only:
+        return call_api("GET", "/api/update")
+    result = call_api("POST", "/api/update")
+    result["note"] = ("The harness is restarting, so the API will be unreachable "
+                      "for about a minute. Programs keep running. Call again with "
+                      "check_only=true afterwards to confirm the new version, or "
+                      "read harness_update_logs.")
+    return result
+
+
+def t_harness_update_logs(lines=80):
+    return call_api("GET", "/api/update/logs", query={"lines": lines})
+
+
 def t_show_on_monitor(name, on=True):
     return call_api("POST", f"/api/programs/{urllib.parse.quote(name)}/monitor",
                     {"on": on})
@@ -264,6 +286,28 @@ TOOLS = {
         {"name": _s("string", "Program name."),
          "env": _s("string", "One KEY=VALUE per line. Blank lines and # comments allowed. Empty string deletes them all.")},
         ["name", "env"], t_set_secrets),
+
+    "patch_secrets": (
+        "Change individual secrets on a program without touching the others. "
+        "Prefer this over set_secrets: values can't be read back, so replacing "
+        "the whole file means guessing at what was already in it.",
+        {"name": _s("string", "Program name."),
+         "env": _s("object", "KEY -> new value. A null value deletes that key. Keys not named here are left alone."),
+         "restart": _s("boolean", "Restart the program so it picks the values up. Default false.")},
+        ["name", "env"], t_patch_secrets),
+
+    "update_harness": (
+        "Check for, or apply, an update to PiHarness itself from its GitHub "
+        "repository. Applying pulls, reinstalls dependencies and restarts the "
+        "harness; the programs it runs are unaffected and keep running.",
+        {"check_only": _s("boolean", "true (the default) only reports whether an update is available. false applies it.")},
+        [], t_update_harness),
+
+    "harness_update_logs": (
+        "The log from the last PiHarness self-update. Survives the restart the "
+        "update causes, so this is how you find out whether it worked.",
+        {"lines": _s("integer", "How many lines. Default 80, capped at 400.")},
+        [], t_harness_update_logs),
 
     "show_on_monitor": (
         "Put a program's web UI fullscreen on the monitor plugged into the Pi, "
