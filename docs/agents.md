@@ -83,18 +83,22 @@ Invoke-WebRequest http://piharness.local:8080/agent/piharness_mcp.py -OutFile pi
 ### Claude Code
 
 ```bash
-claude mcp add piharness \
+claude mcp add piharness --scope user \
   --env PIHARNESS_URL=http://piharness.local:8080 \
   --env PIHARNESS_TOKEN=phk_... \
   -- python3 "$PWD/piharness_mcp.py"
 ```
+
+Without `--scope user` the server is registered for the one folder you ran it
+in. Open Claude Code anywhere else and the tools are simply absent, which reads
+as "the MCP server is broken" rather than "it lives in another folder".
 
 PowerShell has no `\` line continuation — it passes the backslash through as an
 argument and `claude` rejects it. Put it on one line, and use `python` rather
 than `python3`:
 
 ```powershell
-claude mcp add piharness --env PIHARNESS_URL=http://piharness.local:8080 --env PIHARNESS_TOKEN=phk_... -- python "$PWD/piharness_mcp.py"
+claude mcp add piharness --scope user --env PIHARNESS_URL=http://piharness.local:8080 --env PIHARNESS_TOKEN=phk_... -- python "$PWD/piharness_mcp.py"
 ```
 
 ### Codex
