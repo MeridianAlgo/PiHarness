@@ -558,7 +558,9 @@ function agentSnippets(token) {
       ? `Invoke-WebRequest ${base}/agent/piharness_mcp.py -OutFile piharness_mcp.py`
       : `curl -O ${base}/agent/piharness_mcp.py`,
     // One line, no continuations: the same text pastes into any shell.
-    claude: `claude mcp add piharness --env PIHARNESS_URL=${base}`
+    // --scope user, or the server only exists in the folder you pasted it in,
+    // and looks like it was never added from anywhere else.
+    claude: `claude mcp add piharness --scope user --env PIHARNESS_URL=${base}`
       + ` --env PIHARNESS_TOKEN=${t} -- ${py} "$PWD/piharness_mcp.py"`,
     codex: `[mcp_servers.piharness]\ncommand = "${py}"\nargs = ["/full/path/to/piharness_mcp.py"]\nenv = { PIHARNESS_URL = "${base}", PIHARNESS_TOKEN = "${t}" }`,
     agent: `${base}/api/agent`,
