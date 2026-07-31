@@ -72,6 +72,14 @@ Download it from your own harness:
 curl -O http://piharness.local:8080/agent/piharness_mcp.py
 ```
 
+On Windows, `curl` is an alias for `Invoke-WebRequest`, where `-O` means
+something else, so PowerShell asks you for a `Uri` instead of downloading
+anything. Use:
+
+```powershell
+Invoke-WebRequest http://piharness.local:8080/agent/piharness_mcp.py -OutFile piharness_mcp.py
+```
+
 ### Claude Code
 
 ```bash
@@ -79,6 +87,14 @@ claude mcp add piharness \
   --env PIHARNESS_URL=http://piharness.local:8080 \
   --env PIHARNESS_TOKEN=phk_... \
   -- python3 "$PWD/piharness_mcp.py"
+```
+
+PowerShell has no `\` line continuation — it passes the backslash through as an
+argument and `claude` rejects it. Put it on one line, and use `python` rather
+than `python3`:
+
+```powershell
+claude mcp add piharness --env PIHARNESS_URL=http://piharness.local:8080 --env PIHARNESS_TOKEN=phk_... -- python "$PWD/piharness_mcp.py"
 ```
 
 ### Codex

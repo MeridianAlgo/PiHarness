@@ -548,10 +548,19 @@ async function createToken() {
 function agentSnippets(token) {
   const base = location.origin;
   const t = token || '<your token>';
+  // PowerShell aliases curl to Invoke-WebRequest, where -O means something else
+  // entirely, and treats a trailing \ as an argument rather than a line
+  // continuation. Give Windows its own commands instead of a broken paste.
+  const win = /win/i.test(navigator.userAgentData?.platform || navigator.platform || '');
+  const py = win ? 'python' : 'python3';
   return {
-    curl: `curl -O ${base}/agent/piharness_mcp.py`,
-    claude: `claude mcp add piharness \\\n  --env PIHARNESS_URL=${base} \\\n  --env PIHARNESS_TOKEN=${t} \\\n  -- python3 "$PWD/piharness_mcp.py"`,
-    codex: `[mcp_servers.piharness]\ncommand = "python3"\nargs = ["/full/path/to/piharness_mcp.py"]\nenv = { PIHARNESS_URL = "${base}", PIHARNESS_TOKEN = "${t}" }`,
+    curl: win
+      ? `Invoke-WebRequest ${base}/agent/piharness_mcp.py -OutFile piharness_mcp.py`
+      : `curl -O ${base}/agent/piharness_mcp.py`,
+    // One line, no continuations: the same text pastes into any shell.
+    claude: `claude mcp add piharness --env PIHARNESS_URL=${base}`
+      + ` --env PIHARNESS_TOKEN=${t} -- ${py} "$PWD/piharness_mcp.py"`,
+    codex: `[mcp_servers.piharness]\ncommand = "${py}"\nargs = ["/full/path/to/piharness_mcp.py"]\nenv = { PIHARNESS_URL = "${base}", PIHARNESS_TOKEN = "${t}" }`,
     agent: `${base}/api/agent`,
   };
 }
