@@ -144,12 +144,21 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
 | `check_updates` | Which programs have a newer commit on GitHub |
 | `remove_program` | Stop and delete. Requires `confirm=true` |
 | `program_logs` | Journal tail. The first place to look when something fails |
+| `list_files` | The files in a program's clone, minus `.git`, virtualenvs and build output |
+| `read_file` | One text file from a program's clone |
+| `write_file` | Patch code in place. Writes the whole file; `restart=true` to run it |
 | `list_secret_names` | Secret names, never values |
 | `set_secrets` | Replace a program's secrets wholesale |
 | `patch_secrets` | Change named secrets and leave the rest alone. Prefer this — values can't be read back, so a full replace means guessing at what was there |
 | `update_harness` | Check for, or apply, an update to PiHarness itself |
 | `harness_update_logs` | What the last self-update did. Survives the restart it caused |
 | `show_on_monitor` | Put a program fullscreen on the Pi's screen, or clear it |
+
+`write_file` edits the clone on the Pi, not GitHub. Paths stay inside the
+program's directory and `.git` is off limits, so a bad path can't reach the rest
+of the box or corrupt the clone. A local edit that isn't also committed upstream
+will block the next `git pull --ff-only`, leaving the program on its current
+code — fine for a quick fix on the box, not a substitute for a commit.
 
 `remove_program` refuses without `confirm=true`, and says what it would delete.
 That's deliberate: it's the one tool that destroys work, and an agent that

@@ -89,6 +89,9 @@ with 413. Proxied program traffic under `/apps/` is not rate limited.
 | `/api/programs/{name}` | DELETE | Stop and remove the program (the GitHub repo is untouched) |
 | `/api/programs/{name}/logs` | GET | Journal tail (`?lines=`, capped at 400) |
 | `/api/programs/{name}/monitor` | POST | `{on: true \| false}`, show on or clear the attached monitor |
+| `/api/programs/{name}/files` | GET | The program's files and sizes (`?path=` to scope it). Skips `.git`, virtualenvs, `node_modules` and build output |
+| `/api/programs/{name}/file` | GET | One text file: `?path=src/main.py`. 512 KB max |
+| `/api/programs/{name}/file` | PUT | Write a file: `{path, content, restart?}`. Creates missing folders |
 | `/api/programs/{name}/secrets` | GET (session) / PUT | Read or replace the program's `KEY=VALUE` secrets |
 | `/api/programs/{name}/secrets` | PATCH | Merge named keys: `{env: {KEY: value \| null}, restart?}`. Also accepts the program's own `HARNESS_TOKEN` |
 | `/api/programs/{name}/secret-names` | GET | Secret names without their values. Usable with a token |
