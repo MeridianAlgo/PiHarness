@@ -85,6 +85,62 @@ def test_refresh_units_is_idempotent(authed, monkeypatch):
     assert restarts == []
 
 
+# ── Files ─────────────────────────────────────────────────────────────────────
+
+def _cloned(authed, name="app"):
+    """A settled program with a directory on disk, as a real clone would have."""
+    authed.post("/api/programs", json={"repo_url": f"o/{name}"})
+    _settle(name)
+    from pathlib import Path
+    root = Path(programs.load()[name]["dir"])
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def test_files_roundtrip(authed):
+    root = _cloned(authed)
+    (root / "main.py").write_text("print('old')\n")
+    (root / ".git").mkdir()
+    (root / ".git" / "config").write_text("secret")
+    (root / "node_modules").mkdir()
+    (root / "node_modules" / "junk.js").write_text("x")
+
+    listed = [f["path"] for f in authed.get("/api/programs/app/files").json()["files"]]
+    assert listed == ["main.py"]   # .git and node_modules are skipped
+
+    assert authed.get("/api/programs/app/file",
+                      params={"path": "main.py"}).json()["content"] == "print('old')\n"
+
+    r = authed.put("/api/programs/app/file",
+                   json={"path": "sub/dir/new.py", "content": "print('new')\n"})
+    assert r.status_code == 200
+    assert (root / "sub/dir/new.py").read_text() == "print('new')\n"
+    assert r.json()["restarted"] is False
+
+    assert authed.get("/api/programs/app/file",
+                      params={"path": "missing.py"}).status_code == 404
+
+
+@pytest.mark.parametrize("path", ["../../etc/passwd", "/etc/passwd", ".git/config",
+                                  "sub/../../outside.txt"])
+def test_files_cannot_escape_the_program(authed, path):
+    _cloned(authed)
+    assert authed.get("/api/programs/app/file", params={"path": path}).status_code == 400
+    assert authed.put("/api/programs/app/file",
+                      json={"path": path, "content": "pwned"}).status_code == 400
+
+
+def test_writing_a_file_can_restart_the_program(authed, no_shell, monkeypatch):
+    _cloned(authed)
+    _settle("app", start_command="python3 main.py")
+    monkeypatch.setattr(programs, "unit_state", lambda n: "active")
+
+    r = authed.put("/api/programs/app/file",
+                   json={"path": "main.py", "content": "x = 1\n", "restart": True})
+    assert r.json()["restarted"] is True
+    assert ["systemctl", "restart", "harness-prog-app"] in [c[0] for c in no_shell]
+
+
 def test_secrets_roundtrip(authed):
     authed.post("/api/programs", json={"repo_url": "o/app"})
     _settle("app")

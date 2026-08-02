@@ -2,6 +2,7 @@
 a program's web UI a link from outside the LAN."""
 import os
 import re
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -195,6 +196,107 @@ def program_logs(name: str, lines: int = 80, _: str = Depends(require_auth)):
         ["journalctl", "-u", programs.unit(name), "--no-pager", "-n", str(min(lines, 400))],
         timeout=10)
     return {"logs": out if code == 0 else "No logs available."}
+
+
+# ── Files ─────────────────────────────────────────────────────────────────────
+# Read and write files inside a program's clone, so an agent can patch code in
+# place instead of only changing settings. Paths are resolved before the check,
+# so neither ".." nor a symlink can point outside the program's directory, and
+# .git is off limits: writing into it corrupts the clone and breaks OTA.
+
+# Directories worth walking past when listing: machine-generated, huge, and
+# never the thing you came to edit.
+_SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__",
+              ".mypy_cache", ".pytest_cache", "dist", "build"}
+_MAX_FILE = 512_000
+_MAX_LISTED = 2000
+
+
+def _prog_path(prog: dict, rel: str) -> Path:
+    root = Path(prog["dir"]).resolve()
+    try:
+        if rel.startswith(("/", "\\")) or Path(rel).is_absolute():
+            raise ValueError("absolute")
+        path = (root / rel).resolve()
+        inside = path.relative_to(root)
+    except (OSError, ValueError):
+        raise HTTPException(400, "Path must be relative and stay inside the "
+                                 "program's directory.")
+    if ".git" in inside.parts:
+        raise HTTPException(400, "The .git directory is off limits.")
+    return path
+
+
+@router.get("/{name}/files")
+def list_files(name: str, path: str = "", _: str = Depends(require_auth)):
+    """The program's files, so an agent can find what to read before editing."""
+    prog = _prog(name)
+    root = Path(prog["dir"]).resolve()
+    start = _prog_path(prog, path)
+    if not start.is_dir():
+        raise HTTPException(404, "No such directory in this program.")
+    files = []
+    for dirpath, dirnames, filenames in os.walk(start):
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
+        for filename in sorted(filenames):
+            full = Path(dirpath) / filename
+            try:
+                files.append({"path": str(full.relative_to(root)).replace("\\", "/"),
+                              "bytes": full.stat().st_size})
+            except OSError:
+                continue
+            if len(files) >= _MAX_LISTED:
+                return {"files": files, "truncated": True}
+    return {"files": files, "truncated": False}
+
+
+@router.get("/{name}/file")
+def read_file(name: str, path: str, _: str = Depends(require_auth)):
+    file = _prog_path(_prog(name), path)
+    if not file.is_file():
+        raise HTTPException(404, "No such file in this program.")
+    if file.stat().st_size > _MAX_FILE:
+        raise HTTPException(413, f"File is larger than {_MAX_FILE // 1000} KB.")
+    try:
+        content = file.read_text()
+    except UnicodeDecodeError:
+        raise HTTPException(415, "That file isn't text.")
+    except OSError as exc:
+        raise HTTPException(500, f"Could not read it: {exc}")
+    return {"path": path, "content": content, "bytes": file.stat().st_size}
+
+
+class WriteFileRequest(BaseModel):
+    path: str
+    content: str
+    restart: bool = False
+
+
+@router.put("/{name}/file")
+def write_file(name: str, req: WriteFileRequest, _: str = Depends(require_auth)):
+    """Write a file in the program's clone, creating it if it doesn't exist.
+
+    A running program keeps executing the code it loaded at start, so nothing
+    changes on disk until it restarts — hence the flag. Left off by default so
+    a multi-file edit restarts once at the end, not after every file."""
+    prog = _prog(name)
+    if len(req.content) > _MAX_FILE:
+        raise HTTPException(413, f"Content is larger than {_MAX_FILE // 1000} KB.")
+    file = _prog_path(prog, req.path)
+    if file.is_dir():
+        raise HTTPException(400, "That path is a directory.")
+    try:
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(req.content)
+    except OSError as exc:
+        raise HTTPException(500, f"Could not write it: {exc}")
+    restarted = False
+    if req.restart and prog.get("start_command") and programs.unit_state(name) == "active":
+        programs._run(["systemctl", "restart", programs.unit(name)], timeout=30)
+        kiosk.kick(name)
+        restarted = True
+    return {"status": "saved", "path": req.path,
+            "bytes": len(req.content.encode()), "restarted": restarted}
 
 
 # ── Monitor ───────────────────────────────────────────────────────────────────

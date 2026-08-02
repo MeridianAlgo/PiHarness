@@ -29,7 +29,7 @@ import urllib.parse
 import urllib.request
 
 NAME = "piharness"
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 # Versions whose shape this server matches. A client asking for one of these
 # gets it echoed back; anything else is answered with our newest.
 KNOWN_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -162,6 +162,25 @@ def t_program_logs(name, lines=80):
                     query={"lines": lines})
 
 
+def t_list_files(name, path=""):
+    return call_api("GET", f"/api/programs/{urllib.parse.quote(name)}/files",
+                    query={"path": path})
+
+
+def t_read_file(name, path):
+    return call_api("GET", f"/api/programs/{urllib.parse.quote(name)}/file",
+                    query={"path": path})
+
+
+def t_write_file(name, path, content, restart=False):
+    result = call_api("PUT", f"/api/programs/{urllib.parse.quote(name)}/file",
+                      {"path": path, "content": content, "restart": restart})
+    if not restart:
+        result["note"] = ("Written to disk. The running program is still on the "
+                          "old code until it restarts.")
+    return result
+
+
 def t_list_secret_names(name):
     """Names only. Values can't be read through an API key, by design."""
     return call_api("GET", f"/api/programs/{urllib.parse.quote(name)}/secret-names")
@@ -273,6 +292,33 @@ TOOLS = {
         {"name": _s("string", "Program name."),
          "lines": _s("integer", "How many lines. Default 80, capped at 400.")},
         ["name"], t_program_logs),
+
+    "list_files": (
+        "The files in a program's clone on the Pi, with their sizes. Skips "
+        ".git, virtualenvs, node_modules and other build output.",
+        {"name": _s("string", "Program name."),
+         "path": _s("string", "Subdirectory to list. Defaults to the whole program.")},
+        ["name"], t_list_files),
+
+    "read_file": (
+        "Read one text file from a program's clone on the Pi. Paths are "
+        "relative to the program's directory.",
+        {"name": _s("string", "Program name."),
+         "path": _s("string", "Path within the program, e.g. src/main.py.")},
+        ["name", "path"], t_read_file),
+
+    "write_file": (
+        "Write a file in a program's clone on the Pi, creating it and any "
+        "missing folders. This is how you patch code in place. It writes the "
+        "whole file, so read_file first and send back the complete new text. "
+        "The edit is local to the Pi: an ota='github' or 'auto' program whose "
+        "repo later moves on can't fast-forward over it, so commit the same "
+        "change upstream if it should last.",
+        {"name": _s("string", "Program name."),
+         "path": _s("string", "Path within the program, e.g. src/main.py."),
+         "content": _s("string", "The complete new contents of the file."),
+         "restart": _s("boolean", "Restart the program so it runs the new code. Default false — leave it off until the last file of a multi-file edit.")},
+        ["name", "path", "content"], t_write_file),
 
     "list_secret_names": (
         "The names of a program's secrets, without their values. Values cannot "
