@@ -191,7 +191,10 @@ The host for the global link is resolved in this order:
    hole in your router: `cloudflared` dials out to Cloudflare and traffic comes
    back down that connection.
 3. Tailscale, if it's running, in which case the link works on any device signed
-   in to your tailnet.
+   in to your tailnet. That link is `http://<node>:8080` — Tailscale routes to
+   the machine but does not terminate TLS or forward 443, so there is nothing
+   listening on an `https://` origin unless you run `tailscale serve` yourself.
+   If you do, set `HARNESS_PUBLIC_URL` to say so; it outranks this.
 
 Two tunnel modes:
 

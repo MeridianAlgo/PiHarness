@@ -35,7 +35,7 @@ import urllib.parse
 import urllib.request
 
 NAME = "piharness"
-VERSION = "2.1.1"
+VERSION = "2.1.2"
 # Versions whose shape this server matches. A client asking for one of these
 # gets it echoed back; anything else is answered with our newest.
 KNOWN_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
