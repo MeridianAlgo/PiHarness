@@ -39,6 +39,11 @@ AUTO_UPDATE_INTERVAL = int(os.environ.get("HARNESS_AUTO_UPDATE_INTERVAL", str(6 
 # answers "is it climbing right now".
 METRICS_INTERVAL = int(os.environ.get("HARNESS_METRICS_INTERVAL", "5"))
 
+# How often the tunnel is re-checked: restarted if it died, re-read if a quick
+# tunnel came back on a different address. Cheap (two systemctl calls), so it
+# can run often enough that a rotated address is never stale for long.
+TUNNEL_CHECK_INTERVAL = int(os.environ.get("HARNESS_TUNNEL_CHECK_INTERVAL", "60"))
+
 # Requests per minute per IP against /api, before a 429. Generous enough that
 # the dashboard polling plus a person clicking never hits it, low enough that a
 # leaked token can't drive git and systemctl in a loop.

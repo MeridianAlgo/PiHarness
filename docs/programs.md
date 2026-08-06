@@ -543,10 +543,12 @@ it:
 
 - argon2 password hashing, and a per-IP lockout after 8 failed sign-ins.
 - Rate limiting on `/api` (240/min, and 20/min on sign-in).
-- The session cookie is automatically marked `Secure` while a tunnel is up, and
-  HSTS is sent, so the browser will not send it over plain HTTP. Neither is set
-  on a LAN-only install, where pinning HSTS to a hostname with no certificate
-  would lock you out of your own Pi.
+- Sign in over HTTPS — through the tunnel — and the session cookie is marked
+  `Secure` and HSTS is sent, so that session is never sent in the clear. Sign in
+  over plain HTTP on the LAN and neither is set, because a `Secure` cookie is
+  discarded by the browser on a plain-HTTP page, and HSTS pinned to a hostname
+  with no certificate would lock you out of your own Pi. It is decided per
+  request, so having a tunnel up does not break LAN sign-in.
 - Sessions are HttpOnly and in memory: restarting the harness signs out every
   browser. API tokens survive a restart and are revoked individually.
 

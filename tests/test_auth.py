@@ -93,3 +93,44 @@ def test_password_change_invalidates_sessions(authed):
     assert authed.get("/api/me").status_code == 401   # signed out everywhere
     assert authed.post("/api/login", json={
         "username": "admin", "password": "brandnewpass"}).status_code == 200
+
+
+# ── Cookie scope ──────────────────────────────────────────────────────────────
+# The harness is normally reachable two ways at once: plain HTTP on the LAN and
+# HTTPS through the tunnel. Secure was decided from "is a tunnel enabled", which
+# is a property of the box rather than of the request — so turning on a tunnel
+# marked the cookie Secure for LAN sign-ins too, the browser discarded a cookie
+# it had just been handed, and every call after a successful sign-in came back
+# 401 with no way to tell why.
+
+def _cookie_header(response):
+    return response.headers.get("set-cookie", "")
+
+
+def test_lan_signin_over_http_gets_a_usable_cookie(client, monkeypatch):
+    from harness import tunnel
+    monkeypatch.setattr(tunnel, "load", lambda: {"enabled": True, "mode": "quick"})
+    monkeypatch.setattr(tunnel, "unit_state", lambda: "active")
+
+    r = client.post("/api/setup", json={"username": "admin", "password": "testpassword"})
+    assert r.status_code == 200
+    assert "secure" not in _cookie_header(r).lower()   # or the browser drops it
+    assert client.get("/api/me").status_code == 200    # and sign-in actually holds
+
+
+def test_https_signin_gets_a_secure_cookie(client):
+    r = client.post("/api/setup", json={"username": "admin", "password": "testpassword"},
+                    headers={"X-Forwarded-Proto": "https"})
+    assert r.status_code == 200
+    assert "secure" in _cookie_header(r).lower()
+
+
+def test_hsts_only_on_https(client, monkeypatch):
+    from harness import tunnel
+    monkeypatch.setattr(tunnel, "load", lambda: {"enabled": True, "mode": "quick"})
+    monkeypatch.setattr(tunnel, "unit_state", lambda: "active")
+    # Pinning HSTS on a plain-HTTP LAN hostname makes the browser force HTTPS to
+    # a Pi with no certificate, and that lockout outlives the tunnel.
+    assert "strict-transport-security" not in client.get("/api/status").headers
+    r = client.get("/api/status", headers={"X-Forwarded-Proto": "https"})
+    assert "strict-transport-security" in r.headers

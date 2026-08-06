@@ -16,6 +16,7 @@ by cloudflared as TUNNEL_TOKEN, so it never appears in the unit file, in argv,
 or in `ps` output — the same treatment the GitHub tokens get in programs.py.
 """
 import json
+import logging
 import os
 import re
 import shutil
@@ -24,6 +25,8 @@ from typing import Optional
 
 from harness import config
 from harness import programs
+
+log = logging.getLogger("harness.tunnel")
 
 TUNNEL_UNIT = "harness-tunnel"
 MODES = ("quick", "named")
@@ -119,13 +122,32 @@ def unit_state() -> str:
 
 
 def quick_hostname() -> Optional[str]:
-    """Scrape the assigned hostname out of the journal. Quick tunnels announce
-    theirs once at startup and never again, so there is nowhere else to get it."""
+    """Scrape the currently assigned hostname out of the journal. Quick tunnels
+    announce theirs once per start and never again, so there is nowhere else to
+    get it. The last match wins: after a restart the journal holds the old
+    hostname as well as the live one."""
     code, out = programs._run(["journalctl", "-u", TUNNEL_UNIT, "--no-pager", "-n", "200"], timeout=10)
     if code != 0:
         return None
     found = _QUICK_HOST_RE.findall(out)
     return found[-1] if found else None
+
+
+# The journal scrape is a subprocess, and the dashboard polls status(). Cache it
+# briefly — but only briefly. Caching it permanently is what left the harness
+# handing out a hostname that had stopped routing hours earlier.
+_QUICK_TTL = 20
+_quick_cache = [0.0, None]   # checked_at (monotonic), hostname
+
+
+def _quick_hostname_cached() -> Optional[str]:
+    now = time.monotonic()
+    if now - _quick_cache[0] > _QUICK_TTL:
+        _quick_cache[0] = now
+        found = quick_hostname()
+        if found:
+            _quick_cache[1] = found
+    return _quick_cache[1]
 
 
 def public_url() -> Optional[str]:
@@ -138,10 +160,15 @@ def public_url() -> Optional[str]:
     if state.get("mode") == "named":
         host = state.get("hostname")
         return f"https://{host}" if host else None
-    host = state.get("hostname") or quick_hostname()
+    # Quick mode: the journal is the truth and the stored value is only a
+    # fallback for when it has rotated out. The other way round meant every
+    # cloudflared restart — a reboot, a network blip, Restart=always doing its
+    # job — silently changed the real address while the UI, the /apps links and
+    # the MCP config all kept pointing at the dead one.
+    host = _quick_hostname_cached() or state.get("hostname")
     if host and host != state.get("hostname"):
-        # Cache it so the dashboard doesn't shell out to journalctl every poll.
         save({**state, "hostname": host})
+        log.info("quick tunnel address is now https://%s", host)
     return f"https://{host}" if host else None
 
 
@@ -195,6 +222,8 @@ def enable(mode: str, token: Optional[str] = None, hostname: Optional[str] = Non
         _write_token(None)
         args = f"--url http://127.0.0.1:{config.PORT}"
         hostname = None
+        # This start gets its own address; don't report the previous one.
+        _quick_cache[0], _quick_cache[1] = 0.0, None
 
     unit_path = config.UNIT_DIR / f"{TUNNEL_UNIT}.service"
     text = _UNIT_TEMPLATE.format(env_file=_env_file(), binary=binary(), args=args)
@@ -204,7 +233,11 @@ def enable(mode: str, token: Optional[str] = None, hostname: Optional[str] = Non
         programs._run(["systemctl", "daemon-reload"], timeout=15)
 
     save({"enabled": True, "mode": mode, "hostname": hostname})
-    code, out = programs._run(["systemctl", "enable", "--now", TUNNEL_UNIT], timeout=45)
+    programs._run(["systemctl", "enable", TUNNEL_UNIT], timeout=30)
+    # restart, not `enable --now`: on an already-running tunnel that was a no-op,
+    # so asking for a quick tunnel again — the way you get out of a dead one —
+    # left you looking at the same dead address.
+    code, out = programs._run(["systemctl", "restart", TUNNEL_UNIT], timeout=45)
     if code > 0:
         raise TunnelError(f"Could not start the tunnel: {out[-300:]}")
 
@@ -238,20 +271,19 @@ def logs(lines: int = 80) -> str:
 
 
 def refresh() -> None:
-    """At startup, re-assert the stored intent. A tunnel the user turned on is
-    expected to still be on after a reboot."""
+    """Re-assert the stored intent, and re-read where a quick tunnel currently
+    lives. Called at startup and then on a timer.
+
+    A tunnel the user turned on is expected to still be on after a reboot, and a
+    quick tunnel that came back on a new address is expected to be reported at
+    that new address rather than the one it had yesterday."""
     state = load()
     if not state.get("enabled"):
         return
-    if unit_state() in ("active", "activating"):
+    if unit_state() not in ("active", "activating"):
+        try:
+            enable(state.get("mode") or "quick", hostname=state.get("hostname"))
+        except TunnelError as exc:
+            log.warning("could not bring the tunnel back up: %s", exc)
         return
-    try:
-        enable(state.get("mode") or "quick", hostname=state.get("hostname"))
-    except TunnelError:
-        pass
-
-
-def is_active() -> bool:
-    """True when the harness is reachable from the public internet through the
-    tunnel. Used to harden cookies and add HSTS without needing configuration."""
-    return bool(load().get("enabled")) and unit_state() in ("active", "activating")
+    public_url()   # persists the current quick hostname if it has rotated

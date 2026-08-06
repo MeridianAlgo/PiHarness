@@ -47,8 +47,21 @@ async def lifespan(_app: FastAPI):
                 log.exception("metrics sample failed")
             await asyncio.sleep(config.METRICS_INTERVAL)
 
+    async def _tunnel_loop():
+        # A quick tunnel's address is regenerated every time cloudflared starts,
+        # so nothing about it is stable except that it will change. Re-check it
+        # on a timer: bring the tunnel back if it died, and pick up the new
+        # address if it rotated, without waiting for someone to open the UI.
+        while True:
+            await asyncio.sleep(config.TUNNEL_CHECK_INTERVAL)
+            try:
+                await asyncio.to_thread(tunnel.refresh)
+            except Exception:   # noqa: BLE001 - a bad cycle can't kill the loop
+                log.exception("tunnel check failed")
+
     tasks = [asyncio.create_task(_auto_update_loop()),
-             asyncio.create_task(_metrics_loop())]
+             asyncio.create_task(_metrics_loop()),
+             asyncio.create_task(_tunnel_loop())]
     try:
         yield
     finally:
@@ -126,10 +139,10 @@ async def _security_headers(request: Request, call_next):
         "default-src 'self'; script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
         "connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
-    # Reachable from the internet means the browser should refuse to speak plain
-    # HTTP to us at all. Not set otherwise: pinning HSTS on a LAN hostname that
-    # has no certificate would lock the user out of their own Pi.
-    if _public_facing():
+    # Only on a request that actually arrived over HTTPS. Keyed off "a tunnel is
+    # enabled" instead, this pinned HSTS on LAN hostnames like piharness.local
+    # that have no certificate, and locked the user out of their own Pi.
+    if _https_request(request):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
     # Never cache the UI, or a browser keeps stale JS after an update.
     if path == "/" or path.startswith("/assets"):
@@ -137,22 +150,22 @@ async def _security_headers(request: Request, call_next):
     return resp
 
 
-# Asking systemd whether the tunnel is up on every single request would be a
-# subprocess per request. The answer changes only when the tunnel is switched,
-# so it is cached briefly.
-_public_cache = [0.0, False]
+def _https_request(request: Request) -> bool:
+    """Whether THIS request reached us over HTTPS.
 
+    Per-request on purpose. The harness is normally reachable two ways at once —
+    plain HTTP on the LAN and HTTPS through the tunnel — so "is a tunnel up"
+    cannot answer it. Answering it that way marked the session cookie Secure for
+    LAN sign-ins too, and the browser then dropped a cookie it had just been
+    given: sign-in returned 200 and every request after it returned 401.
 
-def _public_facing() -> bool:
-    import time
-    now = time.monotonic()
-    if now - _public_cache[0] > 30:
-        _public_cache[0] = now
-        try:
-            _public_cache[1] = bool(config.PUBLIC_URL) or tunnel.is_active()
-        except Exception:   # noqa: BLE001 - never fail a response over this
-            _public_cache[1] = bool(config.PUBLIC_URL)
-    return _public_cache[1]
+    cloudflared and any reverse proxy set X-Forwarded-Proto. A client can forge
+    it, but only over its own connection, and only to make its own cookie
+    stricter — there is nothing to gain."""
+    if request.url.scheme == "https":
+        return True
+    forwarded = request.headers.get("x-forwarded-proto", "")
+    return forwarded.split(",")[0].strip().lower() == "https"
 
 
 app.include_router(api.router)
@@ -166,14 +179,15 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _set_cookie(response: Response, token: str) -> None:
-    # Secure is forced on whenever the harness is reachable from the internet,
-    # so the session cookie can't be sent in the clear even if someone reaches
-    # the Pi over plain HTTP at the same time.
+def _set_cookie(response: Response, token: str, request: Request) -> None:
+    # Secure when the sign-in itself came over HTTPS — through the tunnel, say —
+    # so that cookie is never sent in the clear. A LAN sign-in over plain HTTP
+    # gets a cookie without it, because a Secure cookie handed to a plain-HTTP
+    # page is thrown away by the browser and nobody can sign in at all.
     response.set_cookie(
         config.COOKIE_NAME, token,
         httponly=True, samesite="lax",
-        secure=config.COOKIE_SECURE or _public_facing(),
+        secure=config.COOKIE_SECURE or _https_request(request),
         max_age=config.SESSION_TTL_HOURS * 3600, path="/")
 
 
@@ -201,7 +215,7 @@ def setup(req: LoginRequest, request: Request, response: Response):
         raise HTTPException(400, "Pick a username.")
     auth.set_password(req.username.strip(), req.password)
     token = auth.create_session(req.username.strip())
-    _set_cookie(response, token)
+    _set_cookie(response, token, request)
     log.info("initial account created from %s", _client_ip(request))
     # The session token is not returned. It is the cookie's value, and handing
     # it to the caller as an API credential is what made sessions unrevocable.
@@ -221,7 +235,7 @@ def login(req: LoginRequest, request: Request, response: Response):
         raise HTTPException(401, "Invalid username or password")
     auth.throttle_reset(ip)
     token = auth.create_session(req.username)
-    _set_cookie(response, token)
+    _set_cookie(response, token, request)
     return {"status": "ok", "username": req.username}
 
 
