@@ -10,35 +10,60 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  /* Surfaces — cool graphite, stepped not blurred. No translucency: a status
-     board should never render a value over a shifting background. */
-  --bg:        #0d0e10;
-  --surface:   #141517;
-  --raised:    #1a1c1f;
-  --field:     #0a0b0c;
-  --line:      #26282c;
-  --line-2:    #383b41;
+  /* Surfaces — anodized slate: a dark grey carrying a trace of green, the way
+     bead-blasted aluminium does in shadow. Stepped, not blurred. No
+     translucency: a status board should never render a value over a shifting
+     background. */
+  --bg:        #0f1315;
+  --surface:   #151a1c;
+  --raised:    #1c2226;
+  --field:     #0b0e10;
+  --line:      #262d31;
+  --line-2:    #39434a;
 
   /* Bone rather than pure white: lower glare on a screen that stays on.
      All three tiers clear 4.5:1 on every surface — tertiary carries real body
      copy (footnotes, hints), so it is not allowed to fade into decoration. */
-  --text:      #e8e6e1;
-  --text-2:    #a9a9a3;
-  --text-3:    #8a8a84;
+  --text:      #e7e9e7;
+  --text-2:    #a9afaf;
+  --text-3:    #8b9191;
 
-  /* State. The only hues in the interface. */
-  --run:       #3fb950;
-  --run-bg:    rgba(63,185,80,0.11);
-  --run-line:  rgba(63,185,80,0.32);
-  --wait:      #d29922;
-  --wait-bg:   rgba(210,153,34,0.11);
-  --wait-line: rgba(210,153,34,0.32);
-  --fail:      #f85149;
-  --fail-bg:   rgba(248,81,73,0.11);
-  --fail-line: rgba(248,81,73,0.32);
+  /* State. The only hues in the interface, and taken from indicator lamps
+     rather than from another product's design system: a GaP-green LED, a
+     sodium fitting, a signal-red beacon. The greens developer tools reach for
+     by default are all one leafy hue; this one is the colour a panel lamp
+     actually is, and it is the difference between looking like a tool and
+     looking like every tool. */
+  --run:       #2ed3a7;
+  --run-bg:    rgba(46,211,167,0.10);
+  --run-line:  rgba(46,211,167,0.30);
+  --wait:      #e0a032;
+  --wait-bg:   rgba(224,160,50,0.11);
+  --wait-line: rgba(224,160,50,0.32);
+  --fail:      #f66950;
+  --fail-bg:   rgba(246,105,80,0.11);
+  --fail-line: rgba(246,105,80,0.32);
 
-  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'DejaVu Sans Mono', 'Liberation Mono', monospace;
-  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* The faces the machine already has. No Inter, no JetBrains Mono, no webfont:
+     those are the faces every generated interface reaches for, and a borrowed
+     one would date this page the moment the fashion moves. The system UI face
+     and the system monospace are what the rest of the operating system is set
+     in, which is the right register for a tool that runs a machine. Personality
+     comes from the setting below — tracking, weight, case — not the family. */
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas,
+          'DejaVu Sans Mono', 'Liberation Mono', monospace;
+  --sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  /* Type scale. Steps, so hierarchy is a decision rather than a nudge:
+     readout, display, then three text sizes down to the legal-print tier. */
+  --t-readout: 30px;
+  --t-display: 15px;
+  --t-body:    13px;
+  --t-small:   12px;
+  --t-micro:   10.5px;
+  /* Panel labels are silkscreen: wide, small, uppercase. One tracking value,
+     used everywhere that role appears. */
+  --track-label: 0.14em;
 
   /* Hard edges. A 12px radius reads as a marketing card; 3px reads as a part. */
   --r:    3px;
@@ -52,24 +77,27 @@
 /* Warm paper against the cool dark — the two themes are designed as a pair,
    not as an inversion of each other. */
 [data-theme="light"] {
-  --bg:        #e9e7e1;
-  --surface:   #f4f2ed;
+  --bg:        #e8e6df;
+  --surface:   #f3f1ec;
   --raised:    #fffefb;
   --field:     #fffefb;
-  --line:      #d6d3ca;
-  --line-2:    #b3afa4;
-  --text:      #1b1c1e;
-  --text-2:    #55565a;
-  --text-3:    #64645d;
-  --run:       #15702f;
-  --run-bg:    rgba(21,112,47,0.10);
-  --run-line:  rgba(21,112,47,0.30);
+  --line:      #d5d2c9;
+  --line-2:    #b2aea3;
+  --text:      #1a1c1d;
+  --text-2:    #53555a;
+  --text-3:    #62635d;
+  /* The lamp hues again, but as pigment rather than emission: a lamp reads by
+     being brighter than its panel, ink by being darker than its paper, so the
+     light theme cannot simply reuse the dark values. */
+  --run:       #0d6b55;
+  --run-bg:    rgba(13,107,85,0.10);
+  --run-line:  rgba(13,107,85,0.30);
   --wait:      #8a6100;
   --wait-bg:   rgba(138,97,0,0.10);
   --wait-line: rgba(138,97,0,0.30);
-  --fail:      #c9262d;
-  --fail-bg:   rgba(201,38,45,0.09);
-  --fail-line: rgba(201,38,45,0.28);
+  --fail:      #bf3320;
+  --fail-bg:   rgba(191,51,32,0.09);
+  --fail-line: rgba(191,51,32,0.28);
 }
 
 html, body { min-height: 100%; }
@@ -102,16 +130,22 @@ a { color: var(--text); text-underline-offset: 2px; }
 
 /* ── Controls ─────────────────────────────────────────────────────────────── */
 
+/* Every button is a raised key: filled face, defined edge. A control that
+   announces itself only on hover is a control you have to go hunting for, and
+   an outline on a dark panel reads as a container rather than something you
+   press. Weight separates them instead — the primary action inverts, the rest
+   share one face. */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-height: 30px; padding: 5px var(--s3);
   font: 500 12px/1 var(--mono); letter-spacing: 0.01em;
-  color: var(--text-2); background: transparent;
-  border: 1px solid var(--line); border-radius: var(--r);
+  color: var(--text); background: var(--raised);
+  border: 1px solid var(--line-2); border-radius: var(--r);
   cursor: pointer; white-space: nowrap;
   transition: color .13s, border-color .13s, background .13s;
 }
-.btn:hover:not(:disabled) { color: var(--text); border-color: var(--line-2); background: var(--raised); }
+.btn:hover:not(:disabled) { background: var(--line); border-color: var(--text-3); }
+.btn:active:not(:disabled) { background: var(--field); }
 .btn:disabled { opacity: .45; cursor: default; }
 
 /* One primary action per view; it earns solidity, not a gradient. */
@@ -120,13 +154,12 @@ a { color: var(--text); text-underline-offset: 2px; }
   border-color: var(--text); font-weight: 600;
 }
 .btn-primary:hover:not(:disabled) { color: var(--bg); background: var(--text-2); border-color: var(--text-2); }
-.btn-ghost { border-color: transparent; }
-.btn-ghost:hover:not(:disabled) { border-color: var(--line); }
+.btn-primary:active:not(:disabled) { background: var(--text-3); border-color: var(--text-3); }
 .btn-sm { min-height: 30px; padding: 5px var(--s3); }
 .btn-xs { min-height: 26px; padding: 3px 9px; font-size: 11px; }
 .btn-full { width: 100%; }
-.btn-danger { color: var(--fail); }
-.btn-danger:hover:not(:disabled) { color: var(--fail); border-color: var(--fail-line); background: var(--fail-bg); }
+.btn-danger { color: var(--fail); border-color: var(--fail-line); }
+.btn-danger:hover:not(:disabled) { color: var(--fail); border-color: var(--fail); background: var(--fail-bg); }
 
 input, select, textarea {
   width: 100%; padding: 8px 11px;
@@ -163,9 +196,15 @@ select { font-family: var(--sans); font-size: 12.5px; cursor: pointer; }
   width: 100%; max-width: 340px; padding: var(--s5);
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
 }
-.login-logo { display: flex; align-items: center; gap: 10px; margin-bottom: var(--s5); }
-.login-logo-text { font: 600 17px/1.2 var(--mono); letter-spacing: -0.01em; }
-.login-sub { font: 400 11px/1.4 var(--mono); color: var(--text-3); margin-top: 2px; }
+.login-logo { display: flex; align-items: center; gap: 11px; margin-bottom: var(--s5); }
+.login-logo-text {
+  font: 600 var(--t-display)/1.2 var(--mono);
+  letter-spacing: var(--track-label); text-transform: uppercase; padding-right: var(--track-label);
+}
+.login-sub {
+  font: 400 var(--t-micro)/1.4 var(--mono); color: var(--text-3);
+  letter-spacing: var(--track-label); text-transform: uppercase; margin-top: 4px;
+}
 .login-note {
   margin-top: var(--s4); padding-top: var(--s3); border-top: 1px solid var(--line);
   font-size: 12px; line-height: 1.6; color: var(--text-3);
@@ -186,9 +225,16 @@ select { font-family: var(--sans); font-size: 12.5px; cursor: pointer; }
   background: var(--surface); border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 20;
 }
-.topbar-logo { display: inline-flex; align-items: center; gap: 8px; }
-.topbar-logo-text { font: 600 14px/1 var(--mono); letter-spacing: -0.01em; }
-.topbar-ver { font: 400 11px/1 var(--mono); color: var(--text-3); }
+.topbar-logo { display: inline-flex; align-items: center; gap: 9px; }
+/* The wordmark is set like the lettering stamped on a piece of equipment:
+   uppercase mono, tracked wide. It is the same voice as the panel labels and
+   the nameplate, which is what makes those read as one system rather than as
+   three unrelated small-caps decisions. The trailing pad puts back the space
+   the last letter's tracking adds, so the word still sits optically centred. */
+.topbar-logo-text {
+  font: 600 var(--t-small)/1 var(--mono);
+  letter-spacing: var(--track-label); text-transform: uppercase; padding-right: var(--track-label);
+}
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .topbar-monitor {
   display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px;
@@ -206,10 +252,17 @@ select { font-family: var(--sans); font-size: 12.5px; cursor: pointer; }
 }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--s4); }
 
+/* Setup, not operation. These are visited once and then left alone, so they
+   give up their fill and keep only a rule — present, findable, and no longer
+   competing with the two sections you actually came here to look at. */
+.panel-admin { background: transparent; border-color: transparent; border-top: 1px solid var(--line);
+  border-radius: 0; padding: var(--s4) 0 0; }
+.panel-admin .panel-title { color: var(--text-3); }
+
 /* Schematic label: the rule runs out from the word to the edge of the panel. */
 .panel-title {
   display: flex; align-items: center; gap: 10px; margin-bottom: var(--s3);
-  font: 500 11px/1 var(--mono); letter-spacing: 0.09em; text-transform: uppercase;
+  font: 500 11px/1 var(--mono); letter-spacing: var(--track-label); text-transform: uppercase;
   color: var(--text-3);
 }
 .panel-title::after { content: ''; flex: 1; height: 1px; background: var(--line); }
@@ -370,15 +423,15 @@ span.prog-chip.dim { cursor: default; border-style: dashed; }
    word beside it, so the meaning survives colourblindness and greyscale. */
 
 .tiles {
-  display: grid; gap: 1px; margin-bottom: var(--s3);
+  display: grid; gap: 1px;
   grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
   background: var(--line);            /* 1px hairlines, drawn by the gap */
   border: 1px solid var(--line);
 }
-.tile { display: flex; flex-direction: column; gap: 6px; padding: var(--s3); background: var(--surface); }
+.tile { display: flex; flex-direction: column; gap: 7px; padding: var(--s3) var(--s3) 11px; background: var(--surface); }
 .tile-head { display: flex; align-items: baseline; gap: var(--s2); }
 .tile-label {
-  font: 500 10.5px/1 var(--mono); letter-spacing: 0.09em; text-transform: uppercase;
+  font: 500 var(--t-micro)/1 var(--mono); letter-spacing: var(--track-label); text-transform: uppercase;
   color: var(--text-3);
 }
 .tile-state {
@@ -389,11 +442,14 @@ span.prog-chip.dim { cursor: default; border-style: dashed; }
 .tile-state.ok   { color: var(--text-3); }
 .tile-state.warn { color: var(--wait); background: var(--wait-bg); border-color: var(--wait-line); }
 .tile-state.crit { color: var(--fail); background: var(--fail-bg); border-color: var(--fail-line); }
+/* The readout is the largest type on the page, and it is a number on an
+   instrument rather than a headline: mono, tight, tabular so it cannot jitter
+   as it ticks. Nothing else is allowed to compete with it at this size. */
 .tile-value {
-  font: 600 24px/1 var(--mono); letter-spacing: -0.02em; color: var(--text);
-  font-variant-numeric: tabular-nums;   /* the number must not jitter as it ticks */
+  font: 500 var(--t-readout)/1 var(--mono); letter-spacing: -0.035em; color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
-.tile-unit { margin-left: 2px; font-size: 13px; font-weight: 500; color: var(--text-3); }
+.tile-unit { margin-left: 3px; font-size: var(--t-body); font-weight: 500; color: var(--text-3); letter-spacing: 0; }
 .tile-sub { font: 400 10.5px/1.4 var(--mono); color: var(--text-3); }
 .tile-spark { display: block; width: 100%; height: 26px; overflow: visible; }
 .tile-spark path { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke;
@@ -410,15 +466,32 @@ span.prog-chip.dim { cursor: default; border-style: dashed; }
   font-variant-numeric: tabular-nums;
 }
 
-.host-line {
-  display: flex; flex-wrap: wrap; gap: var(--s3);
-  font: 400 11px/1.5 var(--mono); color: var(--text-3);
+/* ── Front panel ──────────────────────────────────────────────────────────── */
+/* The machine's own face, and the page's opening. It is deliberately not a
+   .panel: giving host state the same bordered box as "API tokens" is what made
+   every section look equally important, which is to say none of them did. */
+
+/* Nameplate: the strip a model number is printed on. Silkscreen setting —
+   small, wide, uppercase — sitting flush on top of the readouts with no gap,
+   so plate and instruments read as one printed face. */
+.nameplate {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s4);
+  padding: 8px var(--s3);
+  font: 500 var(--t-micro)/1.6 var(--mono);
+  letter-spacing: var(--track-label); text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--surface);
+  border: 1px solid var(--line); border-bottom: none;
 }
-.host-line b { font-weight: 500; color: var(--text-2); }
+.nameplate b { font-weight: 600; color: var(--text); letter-spacing: 0.06em; }
+/* Sampling rate is housekeeping rather than identity, so it sits apart. */
+.nameplate span:last-child { margin-left: auto; color: var(--text-3); }
+
 .host-warn {
-  margin-top: var(--s3); padding: 8px 10px;
-  font: 400 11.5px/1.5 var(--mono); color: var(--wait);
-  background: var(--wait-bg); border-left: 2px solid var(--wait); border-radius: 0 var(--r) var(--r) 0;
+  margin-top: -1px; padding: 9px var(--s3);
+  font: 400 var(--t-small)/1.5 var(--mono); color: var(--wait);
+  background: var(--wait-bg);
+  border: 1px solid var(--wait-line); border-left: 2px solid var(--wait);
 }
 
 /* Per-program resource readout, sitting under the command in a card. */
@@ -432,14 +505,28 @@ span.prog-chip.dim { cursor: default; border-style: dashed; }
 /* ── Tunnel and tokens ────────────────────────────────────────────────────── */
 
 .tunnel-state { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s3); }
+
+/* An address: a field you copy out of, so it fills the row and clips rather
+   than wrapping a URL across two lines. */
 .tunnel-url {
   flex: 1; min-width: 0; padding: 7px 10px;
-  font: 400 12px/1.4 var(--mono); color: var(--text);
+  font: 400 var(--t-small)/1.4 var(--mono); color: var(--text);
   background: var(--field); border: 1px solid var(--line); border-radius: var(--r);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .tunnel-url a { color: var(--text); }
-.tunnel-actions { display: flex; flex-wrap: wrap; gap: var(--s2); }
+
+/* Version and commit metadata beside a badge. It was using .tunnel-url, which
+   stretched a short string like "v2.1.2 · 95e2642" into a full-width box and
+   then ellipsised the one line that mattered — the old-version-to-new-version
+   transition. It is a caption, so it sits on the badge's baseline and wraps. */
+.state-meta {
+  font: 400 var(--t-small)/1.5 var(--mono); color: var(--text-2);
+  min-width: 0; word-break: break-word;
+}
+.state-meta.dim { color: var(--text-3); }
+
+.tunnel-actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
 .tunnel-note {
   margin-top: var(--s3); font-size: 12px; line-height: 1.6; color: var(--text-3);
 }
@@ -512,6 +599,9 @@ span.prog-chip.dim { cursor: default; border-style: dashed; }
   .topbar { padding: 9px var(--s3); flex-wrap: wrap; }
   .wrap { padding: var(--s4) var(--s3) var(--s6); gap: var(--s4); }
   .panel { padding: var(--s3); }
+  /* After .panel, so it has to restate itself: an admin section has no box to
+     inset from, and side padding on nothing just pushes the text off-axis. */
+  .panel-admin { padding: var(--s3) 0 0; }
   .import-row { flex-direction: column; }
   /* Touch targets get their full 44px back where fingers are the input. */
   .btn, .prog-chip { min-height: 44px; }
