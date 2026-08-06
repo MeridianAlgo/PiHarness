@@ -57,7 +57,6 @@ function showLogin() {
 function showApp(username) {
   $('view-login').classList.add('hidden');
   $('view-app').classList.remove('hidden');
-  $('topbar-ver').textContent = username ? `signed in as ${username}` : '';
   loadPrograms();
   loadMetrics();
   loadTunnel();
@@ -317,7 +316,8 @@ async function checkUpdates() {
     if (!u.update_available) continue;
     document.querySelector(`[data-upd="${CSS.escape(name)}"]`)?.classList.remove('hidden');
     const btn = document.querySelector(`[data-updbtn="${CSS.escape(name)}"]`);
-    if (btn) { btn.classList.remove('btn-ghost'); btn.classList.add('btn-primary'); }
+    // A program with an update waiting promotes its own button to the primary.
+    if (btn) btn.classList.add('btn-primary');
   }
 }
 
@@ -369,21 +369,21 @@ function card(p, mon) {
   const runButtons = (p.status === 'needs_command' || !p.start_command)
     ? `<button class="btn btn-primary btn-xs" ${act('command', p.name, p.start_command || '')}>Set start command</button>`
     : (p.status === 'active' || p.status === 'activating')
-      ? `<button class="btn btn-ghost btn-xs" ${act('stop', p.name)}>Stop</button>
-         <button class="btn btn-ghost btn-xs" ${act('restart', p.name)}>Restart</button>`
+      ? `<button class="btn btn-xs" ${act('stop', p.name)}>Stop</button>
+         <button class="btn btn-xs" ${act('restart', p.name)}>Restart</button>`
       : canRun ? `<button class="btn btn-primary btn-xs" ${act('start', p.name)}>Start</button>` : '';
 
   const manageButtons = p.status === 'error' ? '' : `
-    ${p.ota !== 'self' ? `<button class="btn btn-ghost btn-xs" data-updbtn="${esc(p.name)}" ${act('update', p.name)} title="git pull the latest code, reinstall dependencies, restart">Update</button>` : ''}
-    <button class="btn btn-ghost btn-xs" ${act('secrets', p.name)} title="KEY=VALUE environment variables, stored on the Pi and injected at start">Secrets</button>
-    ${p.web_port ? `<button class="btn btn-ghost btn-xs" ${act('moncmd', p.name, p.monitor_command || '')} title="Optional command run every time this program goes on the monitor">Monitor cmd${p.monitor_command ? ' · set' : ''}</button>` : ''}
-    ${!p.has_token ? `<button class="btn btn-ghost btn-xs" ${act('token', p.name)} title="Repo gone private? Add a GitHub access token for update checks and pulls.">Add token</button>` : ''}
-    <button class="btn btn-ghost btn-xs" ${act('port', p.name, p.web_port ?? '')} title="The port the program's web UI listens on. The LAN link, global link and kiosk all point here.">Web port${p.web_port ? ` · ${p.web_port}` : ''}</button>
-    <button class="btn btn-ghost btn-xs" ${act('logs', p.name)}>Logs</button>`;
+    ${p.ota !== 'self' ? `<button class="btn btn-xs" data-updbtn="${esc(p.name)}" ${act('update', p.name)} title="git pull the latest code, reinstall dependencies, restart">Update</button>` : ''}
+    <button class="btn btn-xs" ${act('secrets', p.name)} title="KEY=VALUE environment variables, stored on the Pi and injected at start">Secrets</button>
+    ${p.web_port ? `<button class="btn btn-xs" ${act('moncmd', p.name, p.monitor_command || '')} title="Optional command run every time this program goes on the monitor">Monitor cmd${p.monitor_command ? ' · set' : ''}</button>` : ''}
+    ${!p.has_token ? `<button class="btn btn-xs" ${act('token', p.name)} title="Repo gone private? Add a GitHub access token for update checks and pulls.">Add token</button>` : ''}
+    <button class="btn btn-xs" ${act('port', p.name, p.web_port ?? '')} title="The port the program's web UI listens on. The LAN link, global link and kiosk all point here.">Web port${p.web_port ? ` · ${p.web_port}` : ''}</button>
+    <button class="btn btn-xs" ${act('logs', p.name)}>Logs</button>`;
 
   const actions = p.status === 'importing' ? '' : `<div class="prog-actions">
       ${runButtons}${manageButtons}
-      <button class="btn btn-ghost btn-xs btn-danger" ${act('remove', p.name)}>Remove</button>
+      <button class="btn btn-xs btn-danger" ${act('remove', p.name)}>Remove</button>
     </div>`;
 
   return `<div class="prog-card ${st.cls}">
@@ -404,7 +404,7 @@ function card(p, mon) {
       <textarea spellcheck="false" placeholder="API_KEY=abc123&#10;DATABASE_URL=postgres://…&#10;# one KEY=VALUE per line"></textarea>
       <div class="prog-secrets-foot">
         <span>Stored on the Pi only (root-readable file) · injected as environment variables · saving restarts a running program</span>
-        <button class="btn btn-ghost btn-xs" ${act('secrets', p.name)}>Cancel</button>
+        <button class="btn btn-xs" ${act('secrets', p.name)}>Cancel</button>
         <button class="btn btn-primary btn-xs" ${act('savesecrets', p.name)}>Save secrets</button>
       </div>
     </div>
@@ -443,7 +443,7 @@ async function loadTunnel() {
     actions.innerHTML = '';
     $('tunnel-named').classList.add('hidden');
     state.insertAdjacentHTML('beforeend',
-      `<span class="tunnel-url">Install it on the Pi, then reload this page.</span>`);
+      `<span class="state-meta">Install it on the Pi, then reload this page.</span>`);
     return;
   }
   $('tunnel-named').classList.remove('hidden');
@@ -454,14 +454,14 @@ async function loadTunnel() {
     : '<span class="prog-badge wait">connecting</span>';
   const url = t.url
     ? `<span class="tunnel-url"><a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.url)}</a></span>`
-    : t.enabled ? '<span class="tunnel-url">Waiting for Cloudflare to assign an address…</span>'
-    : '<span class="tunnel-url">No public address. The Pi is reachable on your LAN only.</span>';
+    : t.enabled ? '<span class="state-meta">Waiting for Cloudflare to assign an address…</span>'
+    : '<span class="state-meta dim">No public address. The Pi is reachable on your LAN only.</span>';
   state.innerHTML = badge + url
     + (t.ephemeral && t.url ? '<span class="prog-badge wait">changes on restart</span>' : '');
 
   actions.innerHTML = t.enabled
     ? `<button class="btn btn-sm" data-act="tunneloff">Turn off</button>
-       <button class="btn btn-ghost btn-sm" data-act="tunnellogs">Tunnel logs</button>`
+       <button class="btn btn-sm" data-act="tunnellogs">Tunnel logs</button>`
     : `<button class="btn btn-primary btn-sm" data-act="tunnelquick">Get a public address</button>`;
 }
 
@@ -470,26 +470,26 @@ async function loadTunnel() {
 async function loadSelfUpdate() {
   const state = $('selfupdate-state'), actions = $('selfupdate-actions');
   const r = await api('/api/update');
-  if (!r?.ok) { state.innerHTML = '<span class="tunnel-url">Could not check for updates.</span>'; return; }
+  if (!r?.ok) { state.innerHTML = '<span class="state-meta">Could not check for updates.</span>'; return; }
   const u = await r.json();
-  const version = `<span class="tunnel-url">v${esc(u.version)}${u.local ? ' · ' + esc(u.local) : ''}</span>`;
+  const version = `<span class="state-meta">v${esc(u.version)}${u.local ? ' · ' + esc(u.local) : ''}</span>`;
 
   if (u.error) {
     state.innerHTML = `<span class="prog-badge wait">can't check</span>${version}
-      <span class="tunnel-url">${esc(u.error)}</span>`;
+      <span class="state-meta dim">${esc(u.error)}</span>`;
     actions.innerHTML = '';
     return;
   }
   if (!u.update_available) {
     state.innerHTML = `<span class="prog-badge run">up to date</span>${version}`;
-    actions.innerHTML = `<button class="btn btn-ghost btn-sm" data-act="selfcheck">Check again</button>`;
+    actions.innerHTML = `<button class="btn btn-sm" data-act="selfcheck">Check again</button>`;
     return;
   }
   state.innerHTML = `<span class="prog-badge wait">update available</span>
-    <span class="tunnel-url">v${esc(u.version)} → v${esc(u.remote_version || '?')}
-    · ${esc(u.local)} → ${esc(u.remote)} on ${esc(u.branch)}</span>`;
+    <span class="state-meta">v${esc(u.version)} → v${esc(u.remote_version || '?')} · `
+    + `${esc(u.local)} → ${esc(u.remote)} on ${esc(u.branch)}</span>`;
   actions.innerHTML = `<button class="btn btn-primary btn-sm" data-act="selfupdate">Update harness</button>
-    <button class="btn btn-ghost btn-sm" data-act="selflogs">Update log</button>`;
+    <button class="btn btn-sm" data-act="selflogs">Update log</button>`;
 }
 
 // ── API tokens ────────────────────────────────────────────────────────────────
@@ -507,7 +507,7 @@ async function loadTokens() {
           // Issued by the harness, not by you. It dies with its program, and
           // revoking it here would leave that program holding a dead token.
           ? '<span class="token-meta">removed with the program</span>'
-          : `<button class="btn btn-ghost btn-xs btn-danger" data-act="revoke" data-name="${esc(t.id)}"
+          : `<button class="btn btn-xs btn-danger" data-act="revoke" data-name="${esc(t.id)}"
           data-arg="${esc(t.label)}">Revoke</button>`}
       </div>`).join('')
     : '<div class="prog-empty"><b>No tokens</b><div>Create one to drive the harness from a script.</div></div>';
@@ -719,7 +719,7 @@ const HANDLERS = {
   },
 
   port(name, current) {
-    const v = prompt(`Web port for "${name}". The port its web UI actually listens on (1024–65535). Leave empty to remove the web links:`, current || '');
+    const v = prompt(`Web port for "${name}". The port its web UI listens on (1024–65535). Leave empty to remove the web links:`, current || '');
     if (v == null) return;
     const port = parseInt(v, 10);
     if (v.trim() !== '' && !(port >= 1024 && port <= 65535)) { toast('Port must be 1024–65535', 'error'); return; }
@@ -778,7 +778,7 @@ const HANDLERS = {
   },
 
   async selfcheck() {
-    $('selfupdate-state').innerHTML = '<span class="tunnel-url">Checking GitHub…</span>';
+    $('selfupdate-state').innerHTML = '<span class="state-meta dim">Checking GitHub…</span>';
     loadSelfUpdate();
   },
 
@@ -792,7 +792,7 @@ const HANDLERS = {
     toast((await r.json()).detail, 'info', 15000);
     $('selfupdate-state').innerHTML =
       '<span class="prog-badge wait">updating</span>'
-      + '<span class="tunnel-url">Reload the page in a minute.</span>';
+      + '<span class="state-meta">Reload the page in a minute.</span>';
     $('selfupdate-actions').innerHTML = '';
   },
 
