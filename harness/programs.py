@@ -419,10 +419,22 @@ def public_base() -> tuple[Optional[str], Optional[str]]:
         try:
             st = json.loads(out)
             if st.get("BackendState") == "Running":
-                host = (st.get("Self", {}).get("DNSName") or "").rstrip(".") \
-                    or next(iter(st.get("Self", {}).get("TailscaleIPs") or []), None)
+                self_ = st.get("Self", {})
+                host = (self_.get("DNSName") or "").rstrip(".")
+                if not host:
+                    # MagicDNS off. Fall back to an address, IPv4 first: a bare
+                    # IPv6 literal needs brackets in a URL, and Tailscale hands
+                    # out both.
+                    host = next((ip for ip in self_.get("TailscaleIPs") or []
+                                 if ":" not in ip), None)
                 if host:
-                    return f"https://{host}", "tailscale"
+                    # Plain HTTP on the harness's own port. Tailscale routes to
+                    # the node; it does not terminate TLS or forward 443, so the
+                    # https:// origin this used to return pointed at nothing
+                    # listening and every Tailscale link was dead on arrival.
+                    # `tailscale serve` does terminate TLS — anyone running it
+                    # says so with HARNESS_PUBLIC_URL, which outranks this.
+                    return f"http://{host}:{config.PORT}", "tailscale"
         except ValueError:
             pass
     return None, None

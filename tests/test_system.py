@@ -225,6 +225,47 @@ def test_global_links_prefer_the_tunnel_over_tailscale(authed, cloudflared, monk
     assert entry["global_via"] == "cloudflare"
 
 
+def _tailscale(monkeypatch, payload):
+    """Answer `tailscale status --json` with payload, and nothing else."""
+    real = programs._run
+
+    def fake(cmd, *a, **k):
+        if cmd[:2] == ["tailscale", "status"]:
+            return 0, json.dumps(payload)
+        return real(cmd, *a, **k)
+    monkeypatch.setattr(programs, "_run", fake)
+
+
+def test_tailscale_link_is_http_on_the_harness_port(authed, monkeypatch, no_shell):
+    """Tailscale routes to the node; it does not terminate TLS or forward 443.
+    An https:// origin with no port pointed at nothing listening, so every
+    Tailscale link the UI rendered was dead."""
+    _tailscale(monkeypatch, {"BackendState": "Running",
+                             "Self": {"DNSName": "fs-test.tail1234.ts.net."}})
+    authed.post("/api/programs", json={"repo_url": "o/app", "web_port": 3000})
+    _settle("app", start_command="x")
+
+    entry = programs.listing()[0]
+    assert entry["global_via"] == "tailscale"
+    assert entry["global_url"] == f"http://fs-test.tail1234.ts.net:{config.PORT}/apps/app/"
+
+
+def test_tailscale_without_magicdns_uses_the_v4_address(authed, monkeypatch, no_shell):
+    """A bare IPv6 literal needs brackets to be a valid URL, and Tailscale hands
+    out both families."""
+    _tailscale(monkeypatch, {"BackendState": "Running",
+                             "Self": {"DNSName": "",
+                                      "TailscaleIPs": ["fd7a:115c:a1e0::1", "100.101.102.103"]}})
+    base, via = programs.public_base()
+    assert (base, via) == (f"http://100.101.102.103:{config.PORT}", "tailscale")
+
+
+def test_tailscale_that_is_not_running_is_not_a_link(authed, monkeypatch, no_shell):
+    _tailscale(monkeypatch, {"BackendState": "Stopped",
+                             "Self": {"DNSName": "fs-test.tail1234.ts.net."}})
+    assert programs.public_base() == (None, None)
+
+
 def test_configured_public_url_still_wins(authed, cloudflared, monkeypatch):
     monkeypatch.setattr(tunnel, "quick_hostname", lambda: "abc.trycloudflare.com")
     monkeypatch.setattr(config, "PUBLIC_URL", "https://chosen.example.com")
