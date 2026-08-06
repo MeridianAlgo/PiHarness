@@ -21,7 +21,7 @@ def tmp_paths(tmp_path, monkeypatch):
     # import registry are all process state that would otherwise leak between
     # tests. The rate limiter especially: every test signs in from the same
     # client address, so without this the suite throttles itself.
-    from harness import auth, main, metrics, programs
+    from harness import auth, metrics, programs, tunnel
     auth._sessions.clear()
     auth._attempts.clear()
     auth._requests.clear()
@@ -29,7 +29,7 @@ def tmp_paths(tmp_path, monkeypatch):
     metrics._prev_cpu = None
     for series in metrics._history.values():
         series.clear()
-    main._public_cache[0] = 0.0
+    tunnel._quick_cache[0], tunnel._quick_cache[1] = 0.0, None
     return tmp_path
 
 

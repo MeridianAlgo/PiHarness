@@ -115,13 +115,22 @@ env = { PIHARNESS_URL = "http://piharness.local:8080", PIHARNESS_TOKEN = "phk_..
 ### Anything else
 
 The server speaks JSON-RPC over stdin and stdout, so any MCP client can run it.
-It reads three environment variables:
+It reads four environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `PIHARNESS_URL` | `http://piharness.local:8080` | Where the harness is |
 | `PIHARNESS_TOKEN` | *(empty)* | Your API token (`PIHARNESS_KEY` also accepted) |
 | `PIHARNESS_TIMEOUT` | `60` | Seconds to wait on a request |
+| `PIHARNESS_FALLBACK_URLS` | `http://piharness.local:8080` | Comma-separated addresses to try when the one above does not answer |
+
+Point `PIHARNESS_URL` at an address that does not move: the Pi's LAN name, or a
+named tunnel's hostname. A quick tunnel's `*.trycloudflare.com` address is
+regenerated every time it restarts, so a config built from one stops working
+without warning — and because the harness is the same box either way, the fix is
+usually just to reach it on the LAN instead. That is what the fallbacks are for:
+when the main address does not answer, each one is tried in turn and whichever
+responds is used for the rest of the session.
 
 You can check it works without an agent:
 

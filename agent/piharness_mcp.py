@@ -11,6 +11,12 @@ Nothing to install: JSON-RPC over stdin and stdout with the standard library.
     export PIHARNESS_TOKEN=phk_...
     python3 piharness_mcp.py
 
+Point PIHARNESS_URL at an address that does not move — the Pi's LAN name, or a
+named tunnel's hostname. A quick tunnel's https://<words>.trycloudflare.com is
+regenerated on every restart, so a config built on one stops working without
+warning. PIHARNESS_FALLBACK_URLS (comma-separated) is tried whenever the main
+address does not answer, which is what keeps that from being fatal.
+
 Make a token in the harness web UI under API tokens, or:
 
     curl -sS -X POST $PIHARNESS_URL/api/tokens -b cookies.txt \\
@@ -29,7 +35,7 @@ import urllib.parse
 import urllib.request
 
 NAME = "piharness"
-VERSION = "2.1.0"
+VERSION = "2.1.1"
 # Versions whose shape this server matches. A client asking for one of these
 # gets it echoed back; anything else is answered with our newest.
 KNOWN_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -40,6 +46,16 @@ BASE = os.environ.get("PIHARNESS_URL", "http://piharness.local:8080").rstrip("/"
 KEY = os.environ.get("PIHARNESS_TOKEN") or os.environ.get("PIHARNESS_KEY", "")
 TIMEOUT = float(os.environ.get("PIHARNESS_TIMEOUT", "60"))
 
+# Where else to look when PIHARNESS_URL stops resolving. A quick Cloudflare
+# tunnel hands out a new hostname every time cloudflared restarts, so a config
+# pointing at one is temporary by construction — and when it dies, every tool
+# here dies with it. Falling back to the Pi's own address on the LAN turns that
+# from "the MCP server is broken" into "it took the other route".
+FALLBACKS = [u.strip().rstrip("/") for u in os.environ.get(
+    "PIHARNESS_FALLBACK_URLS", "http://piharness.local:8080").split(",") if u.strip()]
+# Set once a candidate answers, so the whole session doesn't re-walk the list.
+_reached = None
+
 
 # ── Talking to the harness ────────────────────────────────────────────────────
 
@@ -47,8 +63,11 @@ class HarnessError(Exception):
     pass
 
 
-def call_api(method: str, path: str, body=None, query=None):
-    url = BASE + path
+def _request(base: str, method: str, path: str, body=None, query=None):
+    """One attempt against one address. Lets OSError out if that address could
+    not be reached, so the caller can try the next one; every other failure is
+    already an answer from a harness and must not trigger a retry elsewhere."""
+    url = base + path
     if query:
         url += "?" + urllib.parse.urlencode(query)
     data = json.dumps(body).encode() if body is not None else None
@@ -73,10 +92,44 @@ def call_api(method: str, path: str, body=None, query=None):
                 f"{detail} (HTTP {e.code}). Check PIHARNESS_TOKEN, and that "
                 f"its scope allows this.")
         raise HarnessError(f"{detail} (HTTP {e.code})")
-    except urllib.error.URLError as e:
-        raise HarnessError(
-            f"Could not reach the harness at {BASE}: {e.reason}. Is PIHARNESS_URL "
-            f"right and the Pi awake?")
+
+
+def call_api(method: str, path: str, body=None, query=None):
+    global _reached
+    # Candidates in order, no duplicates: whatever last worked, then the
+    # configured address, then the fallbacks.
+    candidates = []
+    for base in ([_reached] if _reached else []) + [BASE] + FALLBACKS:
+        if base and base not in candidates:
+            candidates.append(base)
+
+    unreachable = []
+    for base in candidates:
+        try:
+            result = _request(base, method, path, body, query)
+        except OSError as e:
+            # OSError, not just URLError: a dead HTTPS address fails with an
+            # ssl.SSLError, which is not a URLError and used to escape as a raw
+            # "SSLError: unknown error" with no hint of what to do about it.
+            # HTTPError is a URLError too, but _request has already turned every
+            # one of those into a HarnessError, so nothing answered lands here.
+            unreachable.append(f"{base} ({getattr(e, 'reason', None) or e})")
+            continue
+        if base != _reached:
+            # Only to stderr: stdout is the JSON-RPC channel and anything
+            # written there corrupts the protocol.
+            print(f"piharness: using {base}", file=sys.stderr, flush=True)
+            _reached = base
+        return result
+
+    raise HarnessError(
+        "Could not reach the harness at any known address: "
+        + "; ".join(unreachable)
+        + ". If PIHARNESS_URL is a trycloudflare.com address, it has expired — "
+          "those are regenerated every time the tunnel restarts. Point "
+          "PIHARNESS_URL at the Pi's LAN address instead, or set "
+          "PIHARNESS_FALLBACK_URLS to it, and read the current public address "
+          "from the harness UI.")
 
 
 # ── Tools ─────────────────────────────────────────────────────────────────────

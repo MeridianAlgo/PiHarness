@@ -146,6 +146,36 @@ def test_quick_tunnel_writes_a_unit_and_reports_its_address(authed, cloudflared,
     assert "tunnel --no-autoupdate" in unit
 
 
+def test_a_rotated_quick_address_replaces_the_stored_one(authed, cloudflared, monkeypatch):
+    """A quick tunnel is handed a new hostname every time cloudflared starts.
+    The stored one was preferred over the journal, so a restart left the harness
+    advertising an address that no longer routed — the UI, the /apps links and
+    any MCP config built from them all pointed at a dead host."""
+    monkeypatch.setattr(tunnel, "quick_hostname", lambda: "first-name.trycloudflare.com")
+    assert authed.post("/api/tunnel", json={"mode": "quick"}).json()["url"] \
+        == "https://first-name.trycloudflare.com"
+
+    # cloudflared restarts and Cloudflare assigns a different hostname.
+    monkeypatch.setattr(tunnel, "quick_hostname", lambda: "second-name.trycloudflare.com")
+    tunnel._quick_cache[0] = 0.0          # expire the poll cache, as time would
+    assert authed.get("/api/tunnel").json()["url"] \
+        == "https://second-name.trycloudflare.com"
+    assert tunnel.load()["hostname"] == "second-name.trycloudflare.com"
+
+
+def test_a_quick_address_survives_a_journal_that_has_rotated_out(authed, cloudflared,
+                                                                monkeypatch):
+    """The journal is the only place a quick hostname is announced, so once it
+    ages out there is nothing to scrape. Fall back to the stored value rather
+    than reporting no public address at all."""
+    monkeypatch.setattr(tunnel, "quick_hostname", lambda: "known.trycloudflare.com")
+    authed.post("/api/tunnel", json={"mode": "quick"})
+
+    monkeypatch.setattr(tunnel, "quick_hostname", lambda: None)
+    tunnel._quick_cache[0], tunnel._quick_cache[1] = 0.0, None
+    assert authed.get("/api/tunnel").json()["url"] == "https://known.trycloudflare.com"
+
+
 def test_named_tunnel_keeps_the_token_out_of_the_unit_file(authed, cloudflared):
     token = "eyJhIjoi" + "x" * 120
     r = authed.post("/api/tunnel", json={"mode": "named", "token": token,
